@@ -431,18 +431,14 @@ func newCheckActionCmd() *cobra.Command {
 				}
 				if isActionAllowed(action, pb) {
 					if pb.Policy != nil {
-						fmt.Printf("✅ '%s' is ALLOWED by the permission boundary\n", action)
+						fmt.Printf("✅  %-58s ALLOWED\n", action)
 					} else {
 						_, matchingPatterns := matchesAnyPattern(action, pb.Patterns)
-						fmt.Printf("✅ '%s' matches pattern(s): %s\n", action, strings.Join(matchingPatterns, ", "))
+						fmt.Printf("✅  %-58s matches: %s\n", action, strings.Join(matchingPatterns, ", "))
 					}
 				} else {
 					anyDenied = true
-					if pb.Policy != nil {
-						fmt.Printf("❌ '%s' is DENIED by the permission boundary\n", action)
-					} else {
-						fmt.Printf("❌ '%s' does not match any pattern\n", action)
-					}
+					fmt.Printf("❌  %-58s DENIED\n", action)
 				}
 			}
 
@@ -535,19 +531,19 @@ func newCheckPolicyCmd() *cobra.Command {
 			case "table":
 				fmt.Fprintf(os.Stderr, "Evaluation method: %s\n\n", pb.EvaluationMethod)
 				printWarnings(warnings, os.Stderr)
-				fmt.Printf("%-60s %s\n", "ACTION", "STATUS")
+				fmt.Printf("%-4s %-58s %s\n", "", "ACTION", "STATUS")
 				fmt.Printf("%s\n", strings.Repeat("-", 75))
 				for _, a := range allowedActions {
-					fmt.Printf("%-60s %s\n", a, "✅ ALLOWED")
+					fmt.Printf("✅  %-58s ALLOWED\n", a)
 				}
 				for _, a := range blockedActions {
-					fmt.Printf("%-60s %s\n", a, "❌ BLOCKED")
+					fmt.Printf("❌  %-58s BLOCKED\n", a)
 				}
 				for _, a := range extracted.DenyActions {
-					fmt.Printf("%-60s %s\n", a, "⏭️  SKIPPED (explicitly denied by policy)")
+					fmt.Printf("⏭️   %-58s SKIPPED (explicitly denied by policy)\n", a)
 				}
 				for _, s := range notActionSummaries {
-					fmt.Printf("%-60s %s\n", s, "⚠️  NOTACTION (manual review needed)")
+					fmt.Printf("⚠️   %-58s NOTACTION (manual review needed)\n", s)
 				}
 				fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
 					len(allowedActions), len(blockedActions), len(extracted.DenyActions), len(extracted.NotActionStmts))
@@ -556,27 +552,27 @@ func newCheckPolicyCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "Evaluation method: %s\n\n", pb.EvaluationMethod)
 				printWarnings(warnings, os.Stderr)
 				if len(allowedActions) > 0 {
-					fmt.Println("✅ Allowed actions:")
+					fmt.Println("✅  Allowed actions:")
 					for _, a := range allowedActions {
-						fmt.Printf("  %s\n", a)
+						fmt.Printf("    %s\n", a)
 					}
 				}
 				if len(blockedActions) > 0 {
-					fmt.Println("\n❌ Blocked actions (not allowed by permission boundary):")
+					fmt.Println("\n❌  Blocked actions (not allowed by permission boundary):")
 					for _, a := range blockedActions {
-						fmt.Printf("  %s\n", a)
+						fmt.Printf("    %s\n", a)
 					}
 				}
 				if len(extracted.DenyActions) > 0 {
-					fmt.Println("\n⏭️  Skipped actions (explicitly denied by policy, irrelevant to boundary check):")
+					fmt.Println("\n⏭️   Skipped actions (explicitly denied by policy, irrelevant to boundary check):")
 					for _, a := range extracted.DenyActions {
-						fmt.Printf("  %s\n", a)
+						fmt.Printf("    %s\n", a)
 					}
 				}
 				if len(notActionSummaries) > 0 {
-					fmt.Println("\n⚠️  NotAction statements (requires manual review):")
+					fmt.Println("\n⚠️   NotAction statements (requires manual review):")
 					for _, s := range notActionSummaries {
-						fmt.Printf("  %s\n", s)
+						fmt.Printf("    %s\n", s)
 					}
 				}
 				fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
@@ -684,19 +680,19 @@ in the given policy would gain or lose access when switching from the old to the
 			default: // list
 				printWarnings(warnings, os.Stderr)
 				if len(gained) > 0 {
-					fmt.Println("🟢 Newly allowed by new boundary (gained access):")
+					fmt.Println("🟢  Newly allowed by new boundary (gained access):")
 					for _, a := range gained {
-						fmt.Printf("  %s\n", a)
+						fmt.Printf("    %s\n", a)
 					}
 				}
 				if len(lost) > 0 {
-					fmt.Println("\n🔴 No longer allowed by new boundary (lost access):")
+					fmt.Println("\n🔴  No longer allowed by new boundary (lost access):")
 					for _, a := range lost {
-						fmt.Printf("  %s\n", a)
+						fmt.Printf("    %s\n", a)
 					}
 				}
 				if len(unchanged) > 0 {
-					fmt.Printf("\n⬜ Unchanged: %d action(s)\n", len(unchanged))
+					fmt.Printf("\n⬜  Unchanged: %d action(s)\n", len(unchanged))
 				}
 				fmt.Printf("\nSummary: %d gained, %d lost, %d unchanged\n", len(gained), len(lost), len(unchanged))
 			}
