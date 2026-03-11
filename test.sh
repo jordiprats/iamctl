@@ -260,6 +260,67 @@ echo "$WARNINGS" | grep -q "notresource" \
   || fail "NotResource warning missing"
 
 # -----------------------------------------------------------------------
+# --policy-file flag (multi-policy merging)
+# -----------------------------------------------------------------------
+echo ""
+echo "=== --policy-file flag ==="
+
+# Single --policy-file (same as positional arg)
+"$BINARY" check-policy \
+  --pb "$TESTDATA/test-pb.json" \
+  --policy-file "$TESTDATA/test-policy.json" \
+  --output json > "$TMPDIR_TEST/pf_single.json" || true
+jq -e '.summary.allowed == 6 and .summary.blocked == 3' "$TMPDIR_TEST/pf_single.json" > /dev/null \
+  && pass "--policy-file works as sole policy source" \
+  || fail "--policy-file sole source counts wrong"
+
+# --policy-file combined with positional arg (actions merged, deduplicated)
+# test-policy.json:  ec2:DescribeInstances, ec2:DescribeSecurityGroups, ec2:CreateTags,
+#                    ec2:RunInstances, s3:GetObject, s3:PutObject, s3:ListBucket,
+#                    iam:GetUser, iam:CreateRole  (6 allowed, 3 blocked)
+# test-extra-policy.json: s3:GetObject, s3:ListBucket (overlap),
+#                         logs:DescribeLogGroups, logs:CreateLogStream (new, both blocked)
+# Merged: original 9 + 2 new = 11 unique. Allowed: 6, Blocked: 3+2=5
+"$BINARY" check-policy \
+  --pb "$TESTDATA/test-pb.json" \
+  --policy-file "$TESTDATA/test-extra-policy.json" \
+  --output json \
+  "$TESTDATA/test-policy.json" > "$TMPDIR_TEST/pf_merged.json" || true
+MERGED_ALLOWED=$(jq '.summary.allowed' "$TMPDIR_TEST/pf_merged.json")
+MERGED_BLOCKED=$(jq '.summary.blocked' "$TMPDIR_TEST/pf_merged.json")
+if [ "$MERGED_ALLOWED" -eq 6 ] && [ "$MERGED_BLOCKED" -eq 5 ]; then
+  pass "Merged policy counts correct (allowed=$MERGED_ALLOWED blocked=$MERGED_BLOCKED)"
+else
+  fail "Merged policy counts wrong (expected 6 allowed, 5 blocked; got allowed=$MERGED_ALLOWED blocked=$MERGED_BLOCKED)"
+fi
+
+# Verify deduplication — overlapping actions appear only once
+jq '[.allowed[], .blocked[]]' "$TMPDIR_TEST/pf_merged.json" | sort | uniq -d > "$TMPDIR_TEST/pf_dups.txt"
+if [ ! -s "$TMPDIR_TEST/pf_dups.txt" ]; then
+  pass "No duplicate actions in merged output"
+else
+  fail "Found duplicate actions in merged output"
+fi
+
+# Two --policy-file flags (no positional arg)
+"$BINARY" check-policy \
+  --pb "$TESTDATA/test-pb.json" \
+  --policy-file "$TESTDATA/test-policy.json" \
+  --policy-file "$TESTDATA/test-extra-policy.json" \
+  --output json > "$TMPDIR_TEST/pf_two.json" || true
+jq -e '.summary.allowed == 6 and .summary.blocked == 5' "$TMPDIR_TEST/pf_two.json" > /dev/null \
+  && pass "Two --policy-file flags merged correctly" \
+  || fail "Two --policy-file merge counts wrong"
+
+# No policy source at all → should error
+"$BINARY" check-policy --pb "$TESTDATA/test-pb.json" 2>"$TMPDIR_TEST/no_source_err.txt" \
+  && fail "Should error when no policy source specified" \
+  || true
+grep -qi "at least one" "$TMPDIR_TEST/no_source_err.txt" \
+  && pass "Errors when no policy source specified" \
+  || fail "Should error when no policy source specified"
+
+# -----------------------------------------------------------------------
 # diff subcommand
 # -----------------------------------------------------------------------
 echo ""

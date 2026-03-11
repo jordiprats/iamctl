@@ -17,26 +17,27 @@ func newCheckPolicyCmd() *cobra.Command {
 		Use:   "check-policy [policy-file]",
 		Short: "Check which actions in a policy are allowed or blocked by the permission boundary",
 		Args:  cobra.MaximumNArgs(1),
-		Example: `  iam-pb-check check-policy policy.json
-  iam-pb-check check-policy --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
-  iam-pb-check check-policy --managed-policy arn:aws:iam::aws:policy/A --managed-policy arn:aws:iam::aws:policy/B
-  iam-pb-check check-policy --managed-policy arn:aws:iam::aws:policy/A policy.json
-  iam-pb-check check-policy --output json policy.json
+		Example: `  iam-pb-check check-policy --pb boundary.json policy.json
+  iam-pb-check check-policy --pb boundary.json --policy-file extra.json policy.json
+  iam-pb-check check-policy --pb boundary.json --policy-file a.json --policy-file b.json
+  iam-pb-check check-policy --pb boundary.json --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
+  iam-pb-check check-policy --pb boundary.json --output json policy.json
   iam-pb-check check-policy --pb boundary.json --output table policy.json
-  cat policy.json | iam-pb-check check-policy -`,
+  cat policy.json | iam-pb-check check-policy --pb boundary.json -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			format, _ := cmd.Flags().GetString("output")
 			profile, _ := cmd.Flags().GetString("profile")
 			managedPolicies, _ := cmd.Flags().GetStringSlice("managed-policy")
+			policyFiles, _ := cmd.Flags().GetStringSlice("policy-file")
 
 			policyFile := ""
 			if len(args) > 0 {
 				policyFile = args[0]
 			}
 
-			if policyFile == "" && len(managedPolicies) == 0 {
-				return fmt.Errorf("at least one of a policy file or --managed-policy must be specified")
+			if policyFile == "" && len(managedPolicies) == 0 && len(policyFiles) == 0 {
+				return fmt.Errorf("at least one of a policy file, --policy-file, or --managed-policy must be specified")
 			}
 
 			// Merge actions from all policy sources
@@ -56,6 +57,29 @@ func newCheckPolicyCmd() *cobra.Command {
 				var doc policy.PolicyDocument
 				if err := json.Unmarshal(data, &doc); err != nil {
 					return fmt.Errorf("parsing policy JSON: %w", err)
+				}
+				extracted := policy.ExtractActions(doc)
+				for _, a := range extracted.AllowActions {
+					mergedAllow[a] = true
+				}
+				for _, a := range extracted.DenyActions {
+					mergedDeny[a] = true
+				}
+				allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
+				hasWildcards = hasWildcards || extracted.HasWildcards
+				hasConditions = hasConditions || extracted.HasConditions
+				hasNotResources = hasNotResources || extracted.HasNotResources
+			}
+
+			// Load additional local policy files if provided
+			for _, pf := range policyFiles {
+				data, err := policy.ReadFromPathOrStdin(pf)
+				if err != nil {
+					return fmt.Errorf("reading policy file %q: %w", pf, err)
+				}
+				var doc policy.PolicyDocument
+				if err := json.Unmarshal(data, &doc); err != nil {
+					return fmt.Errorf("parsing policy JSON %q: %w", pf, err)
 				}
 				extracted := policy.ExtractActions(doc)
 				for _, a := range extracted.AllowActions {
@@ -232,6 +256,7 @@ func newCheckPolicyCmd() *cobra.Command {
 
 	cmd.Flags().String("pb", "", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
 	cmd.Flags().String("output", "list", "Output format: list, json, or table")
+	cmd.Flags().StringSlice("policy-file", nil, "Path to an additional policy file to include (can be specified multiple times)")
 	cmd.Flags().StringSlice("managed-policy", nil, "ARN of a managed policy to fetch from AWS (can be specified multiple times)")
 	cmd.Flags().String("profile", "", "AWS profile to use when fetching managed policies")
 
