@@ -1,2 +1,5 @@
 *.json
 !testdata/*.json
+pb-checker
+iam-pb-check
+ec2-pb-check

@@ -2,13 +2,17 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/spf13/cobra"
 )
 
@@ -400,25 +404,25 @@ func newRootCmd() *cobra.Command {
 	}
 
 	root.Version = version
-	root.PersistentFlags().String("pb", "pb.json", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
 	root.CompletionOptions.DisableDefaultCmd = true
 
 	root.AddCommand(newCheckActionCmd())
 	root.AddCommand(newCheckPolicyCmd())
+	root.AddCommand(newCheckRoleCmd())
 	root.AddCommand(newDiffCmd())
 
 	return root
 }
 
 func newCheckActionCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "check-action <action> [action...]",
 		Short: "Check if one or more actions are allowed by the permission boundary",
 		Args:  cobra.MinimumNArgs(1),
 		Example: `  pb-checker check-action ec2:RunInstances
   pb-checker check-action s3:PutObject s3:GetObject ec2:DescribeInstances
   pb-checker check-action --pb boundary.json s3:PutObject
-  aws iam get-policy-version ... | pb-checker --pb - check-action ec2:RunInstances`,
+  aws iam get-policy-version ... | pb-checker check-action --pb - ec2:RunInstances`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 
@@ -453,6 +457,9 @@ func newCheckActionCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().String("pb", "pb.json", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
+	return cmd
 }
 
 func newCheckPolicyCmd() *cobra.Command {
@@ -592,8 +599,339 @@ func newCheckPolicyCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().String("pb", "pb.json", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
 	cmd.Flags().String("output", "list", "Output format: list, json, or table")
 	return cmd
+}
+
+func newCheckRoleCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "check-role <role-name>",
+		Short: "Fetch managed policies for an IAM role and check which actions are blocked by the permission boundary",
+		Args:  cobra.ExactArgs(1),
+		Example: `  pb-checker check-role my-role
+  pb-checker check-role --pb boundary.json --output json my-role
+  pb-checker check-role --profile staging my-role`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			format, _ := cmd.Flags().GetString("output")
+			profile, _ := cmd.Flags().GetString("profile")
+			roleName := args[0]
+
+			iamClient, err := newIAMClient(cmd.Context(), profile)
+			if err != nil {
+				return err
+			}
+
+			// If --pb was explicitly provided, load from file; otherwise fetch the role's own PB
+			var pb *PermissionBoundary
+			if cmd.Flags().Changed("pb") {
+				pbFile, _ := cmd.Flags().GetString("pb")
+				pb, err = loadPermissionBoundaryUnified(pbFile)
+				if err != nil {
+					return fmt.Errorf("loading permission boundary: %w", err)
+				}
+			} else {
+				pb, err = fetchRoleBoundary(cmd.Context(), iamClient, roleName)
+				if err != nil {
+					return err
+				}
+			}
+
+			policies, err := fetchRolePolicies(cmd.Context(), iamClient, roleName)
+			if err != nil {
+				return fmt.Errorf("fetching role policies: %w", err)
+			}
+
+			if len(policies) == 0 {
+				fmt.Println("No managed policies attached to role")
+				return nil
+			}
+
+			// Merge all actions from all attached policies
+			mergedAllow := make(map[string]string) // action -> policy name
+			mergedDeny := make(map[string]string)
+			var allNotActionStmts []NotActionStatement
+			hasWildcards := false
+			hasConditions := false
+			hasNotResources := false
+
+			for policyName, policyDoc := range policies {
+				extracted := extractActions(policyDoc)
+				if extracted.HasWildcards {
+					hasWildcards = true
+				}
+				if extracted.HasConditions {
+					hasConditions = true
+				}
+				if extracted.HasNotResources {
+					hasNotResources = true
+				}
+				for _, a := range extracted.AllowActions {
+					mergedAllow[a] = policyName
+				}
+				for _, a := range extracted.DenyActions {
+					mergedDeny[a] = policyName
+				}
+				allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
+			}
+
+			mergedExtracted := ExtractedActions{
+				HasWildcards:    hasWildcards,
+				HasConditions:   hasConditions,
+				HasNotResources: hasNotResources,
+				NotActionStmts:  allNotActionStmts,
+			}
+
+			// Sort actions
+			var allowActions []string
+			for a := range mergedAllow {
+				allowActions = append(allowActions, a)
+			}
+			sort.Strings(allowActions)
+
+			var denyActions []string
+			for a := range mergedDeny {
+				denyActions = append(denyActions, a)
+			}
+			sort.Strings(denyActions)
+			mergedExtracted.AllowActions = allowActions
+			mergedExtracted.DenyActions = denyActions
+
+			// Evaluate against boundary
+			var allowedActions, blockedActions []string
+			for _, action := range allowActions {
+				if isActionAllowed(action, pb) {
+					allowedActions = append(allowedActions, action)
+				} else {
+					blockedActions = append(blockedActions, action)
+				}
+			}
+			sort.Strings(allowedActions)
+			sort.Strings(blockedActions)
+
+			var notActionSummaries []string
+			for _, nas := range allNotActionStmts {
+				summary := fmt.Sprintf("Effect=%s NotAction=[%s]", nas.Effect, strings.Join(nas.NotActions, ", "))
+				if nas.Condition != nil {
+					summary += " (has Condition)"
+				}
+				notActionSummaries = append(notActionSummaries, summary)
+			}
+
+			switch format {
+			case "json":
+				warnings := policyWarnings(mergedExtracted, true)
+				// Build per-policy breakdown
+				policyNames := make([]string, 0, len(policies))
+				for name := range policies {
+					policyNames = append(policyNames, name)
+				}
+				sort.Strings(policyNames)
+
+				blockedDetail := make([]map[string]string, 0, len(blockedActions))
+				for _, a := range blockedActions {
+					blockedDetail = append(blockedDetail, map[string]string{
+						"action": a,
+						"policy": mergedAllow[a],
+					})
+				}
+				result := map[string]interface{}{
+					"role":                  roleName,
+					"evaluation_method":     pb.EvaluationMethod,
+					"attached_policies":     policyNames,
+					"allowed":               nullableStringSlice(allowedActions),
+					"blocked":               blockedDetail,
+					"skipped_deny":          nullableStringSlice(denyActions),
+					"not_action_statements": nullableStringSlice(notActionSummaries),
+					"warnings":              warnings,
+					"summary": map[string]int{
+						"attached_policies":     len(policies),
+						"allowed":               len(allowedActions),
+						"blocked":               len(blockedActions),
+						"skipped_deny":          len(denyActions),
+						"not_action_statements": len(allNotActionStmts),
+					},
+				}
+				out, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(out))
+
+			default: // list
+				warnings := policyWarnings(mergedExtracted, false)
+				fmt.Fprintf(os.Stderr, "Role: %s\n", roleName)
+				fmt.Fprintf(os.Stderr, "Evaluation method: %s\n", pb.EvaluationMethod)
+				fmt.Fprintf(os.Stderr, "Attached managed policies: %d\n", len(policies))
+				for name := range policies {
+					fmt.Fprintf(os.Stderr, "  - %s\n", name)
+				}
+				fmt.Fprintln(os.Stderr)
+				printWarnings(warnings, os.Stderr)
+				if len(allowedActions) > 0 {
+					fmt.Println("🟢  Allowed actions:")
+					for _, a := range allowedActions {
+						fmt.Printf("    %-58s (from %s)\n", a, mergedAllow[a])
+					}
+				}
+				if len(blockedActions) > 0 {
+					fmt.Println("\n🔴  Blocked actions (not allowed by permission boundary):")
+					for _, a := range blockedActions {
+						fmt.Printf("    %-58s (from %s)\n", a, mergedAllow[a])
+					}
+				}
+				if len(denyActions) > 0 {
+					fmt.Println("\n🟡  Skipped actions (explicitly denied by policy):")
+					for _, a := range denyActions {
+						fmt.Printf("    %-58s (from %s)\n", a, mergedDeny[a])
+					}
+				}
+				if len(notActionSummaries) > 0 {
+					fmt.Println("\n🟠  NotAction statements (requires manual review):")
+					for _, s := range notActionSummaries {
+						fmt.Printf("    %s\n", s)
+					}
+				}
+				fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
+					len(allowedActions), len(blockedActions), len(denyActions), len(allNotActionStmts))
+			}
+
+			if len(blockedActions) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().String("pb", "", "Path to the permission boundary file (if omitted, fetches the role's own PB from AWS)")
+	cmd.Flags().String("output", "list", "Output format: list or json")
+	cmd.Flags().String("profile", "", "AWS profile to use (defaults to current AWS_PROFILE / default)")
+	return cmd
+}
+
+// newIAMClient creates an IAM client using the given profile (or default credentials).
+func newIAMClient(ctx context.Context, profile string) (*iam.Client, error) {
+	var opts []func(*config.LoadOptions) error
+	if profile != "" {
+		opts = append(opts, config.WithSharedConfigProfile(profile))
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	return iam.NewFromConfig(cfg), nil
+}
+
+// fetchRoleBoundary fetches the permission boundary attached to a role via the AWS API.
+func fetchRoleBoundary(ctx context.Context, client *iam.Client, roleName string) (*PermissionBoundary, error) {
+	roleOut, err := client.GetRole(ctx, &iam.GetRoleInput{
+		RoleName: &roleName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting role %q: %w", roleName, err)
+	}
+
+	if roleOut.Role.PermissionsBoundary == nil {
+		return nil, fmt.Errorf("role %q has no permission boundary configured", roleName)
+	}
+
+	pbArn := *roleOut.Role.PermissionsBoundary.PermissionsBoundaryArn
+	fmt.Fprintf(os.Stderr, "Using permission boundary from role: %s\n", pbArn)
+
+	// Get the policy's default version
+	policyOut, err := client.GetPolicy(ctx, &iam.GetPolicyInput{
+		PolicyArn: &pbArn,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting permission boundary policy %q: %w", pbArn, err)
+	}
+
+	versionOut, err := client.GetPolicyVersion(ctx, &iam.GetPolicyVersionInput{
+		PolicyArn: &pbArn,
+		VersionId: policyOut.Policy.DefaultVersionId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting permission boundary policy version: %w", err)
+	}
+
+	docStr, err := url.QueryUnescape(*versionOut.PolicyVersion.Document)
+	if err != nil {
+		return nil, fmt.Errorf("decoding permission boundary document: %w", err)
+	}
+
+	var doc PolicyDocument
+	if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+		return nil, fmt.Errorf("parsing permission boundary document: %w", err)
+	}
+
+	return &PermissionBoundary{
+		Policy:           &doc,
+		EvaluationMethod: "Full IAM policy evaluation",
+	}, nil
+}
+
+// fetchRolePolicies uses the AWS SDK to list attached managed policies for a role
+// and fetches each policy's default version document. Returns map[policyName]PolicyDocument.
+func fetchRolePolicies(ctx context.Context, client *iam.Client, roleName string) (map[string]PolicyDocument, error) {
+	// List attached managed policies
+	var policyARNs []struct {
+		ARN  string
+		Name string
+	}
+	var marker *string
+	for {
+		out, err := client.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
+			RoleName: &roleName,
+			Marker:   marker,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing attached policies for role %q: %w", roleName, err)
+		}
+		for _, p := range out.AttachedPolicies {
+			policyARNs = append(policyARNs, struct {
+				ARN  string
+				Name string
+			}{ARN: *p.PolicyArn, Name: *p.PolicyName})
+		}
+		if !out.IsTruncated {
+			break
+		}
+		marker = out.Marker
+	}
+
+	result := make(map[string]PolicyDocument, len(policyARNs))
+	for _, p := range policyARNs {
+		// Get default version ID
+		policyOut, err := client.GetPolicy(ctx, &iam.GetPolicyInput{
+			PolicyArn: &p.ARN,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("getting policy %q: %w", p.ARN, err)
+		}
+
+		versionID := policyOut.Policy.DefaultVersionId
+
+		// Get the policy document
+		versionOut, err := client.GetPolicyVersion(ctx, &iam.GetPolicyVersionInput{
+			PolicyArn: &p.ARN,
+			VersionId: versionID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("getting policy version for %q: %w", p.ARN, err)
+		}
+
+		// Policy document is URL-encoded
+		docStr, err := url.QueryUnescape(*versionOut.PolicyVersion.Document)
+		if err != nil {
+			return nil, fmt.Errorf("decoding policy document for %q: %w", p.Name, err)
+		}
+
+		var doc PolicyDocument
+		if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+			return nil, fmt.Errorf("parsing policy document for %q: %w", p.Name, err)
+		}
+
+		result[p.Name] = doc
+	}
+
+	return result, nil
 }
 
 func newDiffCmd() *cobra.Command {
@@ -711,6 +1049,7 @@ in the given policy would gain or lose access when switching from the old to the
 		},
 	}
 
+	cmd.Flags().String("pb", "pb.json", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
 	cmd.Flags().String("pb-new", "", "Path to the new permission boundary to compare against (required)")
 	cmd.Flags().String("output", "list", "Output format: list or json")
 	return cmd
