@@ -211,5 +211,6 @@ func newCheckRoleCmd() *cobra.Command {
 	cmd.Flags().String("pb", "", "Path to the permission boundary file (if omitted, fetches the role's own PB from AWS)")
 	cmd.Flags().String("output", "list", "Output format: list or json")
 	cmd.Flags().String("profile", "", "AWS profile to use (defaults to current AWS_PROFILE / default)")
+
 	return cmd
 }

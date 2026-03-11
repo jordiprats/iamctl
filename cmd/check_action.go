@@ -54,6 +54,9 @@ func newCheckActionCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().String("pb", "pb.json", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
+	cmd.Flags().String("pb", "", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
+
+	_ = cmd.MarkFlagRequired("pb")
+
 	return cmd
 }

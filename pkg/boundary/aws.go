@@ -102,38 +102,42 @@ func FetchRolePolicies(ctx context.Context, client *iam.Client, roleName string)
 
 	result := make(map[string]policy.PolicyDocument, len(policyARNs))
 	for _, p := range policyARNs {
-		// Get default version ID
-		policyOut, err := client.GetPolicy(ctx, &iam.GetPolicyInput{
-			PolicyArn: &p.ARN,
-		})
+		doc, err := FetchManagedPolicy(ctx, client, p.ARN)
 		if err != nil {
-			return nil, fmt.Errorf("getting policy %q: %w", p.ARN, err)
+			return nil, err
 		}
-
-		versionID := policyOut.Policy.DefaultVersionId
-
-		// Get the policy document
-		versionOut, err := client.GetPolicyVersion(ctx, &iam.GetPolicyVersionInput{
-			PolicyArn: &p.ARN,
-			VersionId: versionID,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("getting policy version for %q: %w", p.ARN, err)
-		}
-
-		// Policy document is URL-encoded
-		docStr, err := url.QueryUnescape(*versionOut.PolicyVersion.Document)
-		if err != nil {
-			return nil, fmt.Errorf("decoding policy document for %q: %w", p.Name, err)
-		}
-
-		var doc policy.PolicyDocument
-		if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
-			return nil, fmt.Errorf("parsing policy document for %q: %w", p.Name, err)
-		}
-
-		result[p.Name] = doc
+		result[p.Name] = *doc
 	}
 
 	return result, nil
+}
+
+// FetchManagedPolicy fetches the default version of a managed policy by ARN and returns its document.
+func FetchManagedPolicy(ctx context.Context, client *iam.Client, policyARN string) (*policy.PolicyDocument, error) {
+	policyOut, err := client.GetPolicy(ctx, &iam.GetPolicyInput{
+		PolicyArn: &policyARN,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting policy %q: %w", policyARN, err)
+	}
+
+	versionOut, err := client.GetPolicyVersion(ctx, &iam.GetPolicyVersionInput{
+		PolicyArn: &policyARN,
+		VersionId: policyOut.Policy.DefaultVersionId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting policy version for %q: %w", policyARN, err)
+	}
+
+	docStr, err := url.QueryUnescape(*versionOut.PolicyVersion.Document)
+	if err != nil {
+		return nil, fmt.Errorf("decoding policy document for %q: %w", policyARN, err)
+	}
+
+	var doc policy.PolicyDocument
+	if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+		return nil, fmt.Errorf("parsing policy document for %q: %w", policyARN, err)
+	}
+
+	return &doc, nil
 }

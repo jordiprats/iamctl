@@ -14,30 +14,111 @@ import (
 
 func newCheckPolicyCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "check-policy <policy-file>",
+		Use:   "check-policy [policy-file]",
 		Short: "Check which actions in a policy are allowed or blocked by the permission boundary",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		Example: `  iam-pb-check check-policy policy.json
+  iam-pb-check check-policy --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
+  iam-pb-check check-policy --managed-policy arn:aws:iam::aws:policy/A --managed-policy arn:aws:iam::aws:policy/B
+  iam-pb-check check-policy --managed-policy arn:aws:iam::aws:policy/A policy.json
   iam-pb-check check-policy --output json policy.json
   iam-pb-check check-policy --pb boundary.json --output table policy.json
   cat policy.json | iam-pb-check check-policy -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			format, _ := cmd.Flags().GetString("output")
-			policyFile := args[0]
+			profile, _ := cmd.Flags().GetString("profile")
+			managedPolicies, _ := cmd.Flags().GetStringSlice("managed-policy")
 
-			data, err := policy.ReadFromPathOrStdin(policyFile)
-			if err != nil {
-				return fmt.Errorf("reading policy file: %w", err)
+			policyFile := ""
+			if len(args) > 0 {
+				policyFile = args[0]
 			}
 
-			var doc policy.PolicyDocument
-			if err := json.Unmarshal(data, &doc); err != nil {
-				return fmt.Errorf("parsing policy JSON: %w", err)
+			if policyFile == "" && len(managedPolicies) == 0 {
+				return fmt.Errorf("at least one of a policy file or --managed-policy must be specified")
 			}
 
-			extracted := policy.ExtractActions(doc)
-			if len(extracted.AllowActions) == 0 && len(extracted.DenyActions) == 0 && len(extracted.NotActionStmts) == 0 {
+			// Merge actions from all policy sources
+			mergedAllow := make(map[string]bool)
+			mergedDeny := make(map[string]bool)
+			var allNotActionStmts []policy.NotActionStatement
+			hasWildcards := false
+			hasConditions := false
+			hasNotResources := false
+
+			// Load local policy file if provided
+			if policyFile != "" {
+				data, err := policy.ReadFromPathOrStdin(policyFile)
+				if err != nil {
+					return fmt.Errorf("reading policy file: %w", err)
+				}
+				var doc policy.PolicyDocument
+				if err := json.Unmarshal(data, &doc); err != nil {
+					return fmt.Errorf("parsing policy JSON: %w", err)
+				}
+				extracted := policy.ExtractActions(doc)
+				for _, a := range extracted.AllowActions {
+					mergedAllow[a] = true
+				}
+				for _, a := range extracted.DenyActions {
+					mergedDeny[a] = true
+				}
+				allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
+				hasWildcards = hasWildcards || extracted.HasWildcards
+				hasConditions = hasConditions || extracted.HasConditions
+				hasNotResources = hasNotResources || extracted.HasNotResources
+			}
+
+			// Fetch managed policies from AWS if provided
+			if len(managedPolicies) > 0 {
+				ctx := cmd.Context()
+				iamClient, err := boundary.NewIAMClient(ctx, profile)
+				if err != nil {
+					return fmt.Errorf("creating AWS IAM client: %w", err)
+				}
+				for _, arn := range managedPolicies {
+					doc, err := boundary.FetchManagedPolicy(ctx, iamClient, arn)
+					if err != nil {
+						return err
+					}
+					extracted := policy.ExtractActions(*doc)
+					for _, a := range extracted.AllowActions {
+						mergedAllow[a] = true
+					}
+					for _, a := range extracted.DenyActions {
+						mergedDeny[a] = true
+					}
+					allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
+					hasWildcards = hasWildcards || extracted.HasWildcards
+					hasConditions = hasConditions || extracted.HasConditions
+					hasNotResources = hasNotResources || extracted.HasNotResources
+				}
+			}
+
+			// Build sorted action lists
+			var allowActions []string
+			for a := range mergedAllow {
+				allowActions = append(allowActions, a)
+			}
+			sort.Strings(allowActions)
+
+			var denyActions []string
+			for a := range mergedDeny {
+				denyActions = append(denyActions, a)
+			}
+			sort.Strings(denyActions)
+
+			extracted := policy.ExtractedActions{
+				AllowActions:    allowActions,
+				DenyActions:     denyActions,
+				NotActionStmts:  allNotActionStmts,
+				HasWildcards:    hasWildcards,
+				HasConditions:   hasConditions,
+				HasNotResources: hasNotResources,
+			}
+
+			if len(allowActions) == 0 && len(denyActions) == 0 && len(allNotActionStmts) == 0 {
 				fmt.Println("No actions found in policy")
 				return nil
 			}
@@ -49,7 +130,7 @@ func newCheckPolicyCmd() *cobra.Command {
 
 			// Evaluate Allow actions against the permission boundary
 			var allowedActions, blockedActions []string
-			for _, action := range extracted.AllowActions {
+			for _, action := range allowActions {
 				if boundary.IsActionAllowed(action, pb) {
 					allowedActions = append(allowedActions, action)
 				} else {
@@ -61,7 +142,7 @@ func newCheckPolicyCmd() *cobra.Command {
 
 			// Summarise NotAction statements for display
 			var notActionSummaries []string
-			for _, nas := range extracted.NotActionStmts {
+			for _, nas := range allNotActionStmts {
 				summary := fmt.Sprintf("Effect=%s NotAction=[%s]", nas.Effect, strings.Join(nas.NotActions, ", "))
 				if nas.Condition != nil {
 					summary += " (has Condition)"
@@ -76,14 +157,14 @@ func newCheckPolicyCmd() *cobra.Command {
 					"evaluation_method":     pb.EvaluationMethod,
 					"allowed":               policy.NullableStringSlice(allowedActions),
 					"blocked":               policy.NullableStringSlice(blockedActions),
-					"skipped_deny":          policy.NullableStringSlice(extracted.DenyActions),
+					"skipped_deny":          policy.NullableStringSlice(denyActions),
 					"not_action_statements": policy.NullableStringSlice(notActionSummaries),
 					"warnings":              warnings,
 					"summary": map[string]int{
 						"allowed":               len(allowedActions),
 						"blocked":               len(blockedActions),
-						"skipped_deny":          len(extracted.DenyActions),
-						"not_action_statements": len(extracted.NotActionStmts),
+						"skipped_deny":          len(denyActions),
+						"not_action_statements": len(allNotActionStmts),
 					},
 				}
 				out, _ := json.MarshalIndent(result, "", "  ")
@@ -101,14 +182,14 @@ func newCheckPolicyCmd() *cobra.Command {
 				for _, a := range blockedActions {
 					fmt.Printf("🔴  %-58s BLOCKED\n", a)
 				}
-				for _, a := range extracted.DenyActions {
+				for _, a := range denyActions {
 					fmt.Printf("🟡  %-58s SKIPPED (explicitly denied by policy)\n", a)
 				}
 				for _, s := range notActionSummaries {
 					fmt.Printf("🟠  %-58s NOTACTION (manual review needed)\n", s)
 				}
 				fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
-					len(allowedActions), len(blockedActions), len(extracted.DenyActions), len(extracted.NotActionStmts))
+					len(allowedActions), len(blockedActions), len(denyActions), len(allNotActionStmts))
 
 			default: // list
 				warnings := policy.Warnings(extracted, false)
@@ -126,9 +207,9 @@ func newCheckPolicyCmd() *cobra.Command {
 						fmt.Printf("    %s\n", a)
 					}
 				}
-				if len(extracted.DenyActions) > 0 {
+				if len(denyActions) > 0 {
 					fmt.Println("\n🟡  Skipped actions (explicitly denied by policy, irrelevant to boundary check):")
-					for _, a := range extracted.DenyActions {
+					for _, a := range denyActions {
 						fmt.Printf("    %s\n", a)
 					}
 				}
@@ -139,7 +220,7 @@ func newCheckPolicyCmd() *cobra.Command {
 					}
 				}
 				fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
-					len(allowedActions), len(blockedActions), len(extracted.DenyActions), len(extracted.NotActionStmts))
+					len(allowedActions), len(blockedActions), len(denyActions), len(allNotActionStmts))
 			}
 
 			if len(blockedActions) > 0 {
@@ -149,7 +230,12 @@ func newCheckPolicyCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().String("pb", "pb.json", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
+	cmd.Flags().String("pb", "", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
 	cmd.Flags().String("output", "list", "Output format: list, json, or table")
+	cmd.Flags().StringSlice("managed-policy", nil, "ARN of a managed policy to fetch from AWS (can be specified multiple times)")
+	cmd.Flags().String("profile", "", "AWS profile to use when fetching managed policies")
+
+	_ = cmd.MarkFlagRequired("pb")
+
 	return cmd
 }
