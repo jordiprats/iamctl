@@ -12,8 +12,16 @@ import (
 	"github.com/jordiprats/iam-pb-check/pkg/policy"
 )
 
+// IAMClient is the subset of the IAM API used by this package.
+type IAMClient interface {
+	GetRole(ctx context.Context, params *iam.GetRoleInput, optFns ...func(*iam.Options)) (*iam.GetRoleOutput, error)
+	GetPolicy(ctx context.Context, params *iam.GetPolicyInput, optFns ...func(*iam.Options)) (*iam.GetPolicyOutput, error)
+	GetPolicyVersion(ctx context.Context, params *iam.GetPolicyVersionInput, optFns ...func(*iam.Options)) (*iam.GetPolicyVersionOutput, error)
+	ListAttachedRolePolicies(ctx context.Context, params *iam.ListAttachedRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+}
+
 // NewIAMClient creates an IAM client using the given profile (or default credentials).
-func NewIAMClient(ctx context.Context, profile string) (*iam.Client, error) {
+func NewIAMClient(ctx context.Context, profile string) (IAMClient, error) {
 	var opts []func(*config.LoadOptions) error
 	if profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(profile))
@@ -26,7 +34,7 @@ func NewIAMClient(ctx context.Context, profile string) (*iam.Client, error) {
 }
 
 // FetchRoleBoundary fetches the permission boundary attached to a role via the AWS API.
-func FetchRoleBoundary(ctx context.Context, client *iam.Client, roleName string) (*PermissionBoundary, error) {
+func FetchRoleBoundary(ctx context.Context, client IAMClient, roleName string) (*PermissionBoundary, error) {
 	roleOut, err := client.GetRole(ctx, &iam.GetRoleInput{
 		RoleName: &roleName,
 	})
@@ -74,7 +82,7 @@ func FetchRoleBoundary(ctx context.Context, client *iam.Client, roleName string)
 }
 
 // FetchRolePolicies lists attached managed policies for a role and fetches each policy document.
-func FetchRolePolicies(ctx context.Context, client *iam.Client, roleName string) (map[string]policy.PolicyDocument, error) {
+func FetchRolePolicies(ctx context.Context, client IAMClient, roleName string) (map[string]policy.PolicyDocument, error) {
 	var policyARNs []struct {
 		ARN  string
 		Name string
@@ -113,7 +121,7 @@ func FetchRolePolicies(ctx context.Context, client *iam.Client, roleName string)
 }
 
 // FetchManagedPolicy fetches the default version of a managed policy by ARN and returns its document.
-func FetchManagedPolicy(ctx context.Context, client *iam.Client, policyARN string) (*policy.PolicyDocument, error) {
+func FetchManagedPolicy(ctx context.Context, client IAMClient, policyARN string) (*policy.PolicyDocument, error) {
 	policyOut, err := client.GetPolicy(ctx, &iam.GetPolicyInput{
 		PolicyArn: &policyARN,
 	})
