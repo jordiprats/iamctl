@@ -17,10 +17,10 @@ func newCheckPolicyCmd() *cobra.Command {
 		Use:   "check-policy <policy-file>",
 		Short: "Check which actions in a policy are allowed or blocked by the permission boundary",
 		Args:  cobra.ExactArgs(1),
-		Example: `  pb-checker check-policy policy.json
-  pb-checker check-policy --output json policy.json
-  pb-checker check-policy --pb boundary.json --output table policy.json
-  cat policy.json | pb-checker check-policy -`,
+		Example: `  iam-pb-check check-policy policy.json
+  iam-pb-check check-policy --output json policy.json
+  iam-pb-check check-policy --pb boundary.json --output table policy.json
+  cat policy.json | iam-pb-check check-policy -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			format, _ := cmd.Flags().GetString("output")

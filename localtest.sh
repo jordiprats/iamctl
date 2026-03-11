@@ -1,7 +1,14 @@
 #!/bin/bash
+set -e
 
+# Build binary
 mkdir -p dist
 go build -o dist/iam-pb-check main.go
+
+# Run tests
+bash test.sh
+
+# Install
 mkdir -p $HOME/local/bin
 mv dist/iam-pb-check $HOME/local/bin/iam-pb-check
 rm $HOME/local/bin/ec2-pb-check
