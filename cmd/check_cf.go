@@ -16,13 +16,20 @@ import (
 func newCheckCfCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "check-cf <template-file>",
-		Short: "Parse a CloudFormation template and check IAM role actions against the permission boundary",
-		Long: `Parse a CloudFormation template, extract IAM roles, fetch their managed policies
-from AWS, and evaluate all actions against the permission boundary.
+		Short: "Parse a CloudFormation template and check IAM roles and policies against the permission boundary",
+		Long: `Parse a CloudFormation template, extract IAM roles and standalone IAM policies,
+fetch managed policies from AWS, and evaluate all actions against the permission boundary.
+
+Supported resource types:
+  - AWS::IAM::Role (managed + inline policies)
+  - AWS::IAM::Policy (standalone policy)
+  - AWS::IAM::ManagedPolicy (standalone managed policy)
 
 The permission boundary is resolved in order:
   1. --pb flag (explicit file)
-  2. PermissionsBoundary property from the template (fetched from AWS by ARN)
+  2. PermissionsBoundary property from roles in the template (fetched from AWS by ARN)
+
+For standalone policies (AWS::IAM::Policy, AWS::IAM::ManagedPolicy), --pb is required.
 
 Managed policy ARNs from ManagedPolicyArns are fetched from AWS.
 Inline policies from the Policies property are parsed directly.
@@ -33,7 +40,8 @@ skipped with a warning since they cannot be resolved without stack parameters.`,
 		Example: `  iam-pb-check check-cf template.yaml
   iam-pb-check check-cf --pb boundary.json template.yaml
   iam-pb-check check-cf --resource LambdaRole template.yaml
-  iam-pb-check check-cf --profile staging --output json template.yaml`,
+  iam-pb-check check-cf --profile staging --output json template.yaml
+  iam-pb-check check-cf --pb boundary.json --resource MyPolicy template.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, _ := cmd.Flags().GetString("output")
 			profile, _ := cmd.Flags().GetString("profile")
@@ -50,32 +58,48 @@ skipped with a warning since they cannot be resolved without stack parameters.`,
 				return err
 			}
 
-			if len(roles) == 0 {
-				fmt.Println("No AWS::IAM::Role resources found in template")
-				return nil
+			policies, err := cfn.ExtractIAMPolicies(tmpl)
+			if err != nil {
+				return err
 			}
 
 			// Filter to a specific resource if requested
 			if resource != "" {
-				var filtered []cfn.IAMRole
+				var filteredRoles []cfn.IAMRole
 				for _, r := range roles {
 					if r.LogicalID == resource {
-						filtered = append(filtered, r)
+						filteredRoles = append(filteredRoles, r)
 					}
 				}
-				if len(filtered) == 0 {
-					available := make([]string, len(roles))
-					for i, r := range roles {
-						available[i] = r.LogicalID
+				var filteredPolicies []cfn.IAMPolicyResource
+				for _, p := range policies {
+					if p.LogicalID == resource {
+						filteredPolicies = append(filteredPolicies, p)
 					}
-					return fmt.Errorf("resource %q not found; available IAM roles: %s", resource, strings.Join(available, ", "))
 				}
-				roles = filtered
+				if len(filteredRoles) == 0 && len(filteredPolicies) == 0 {
+					var available []string
+					for _, r := range roles {
+						available = append(available, r.LogicalID)
+					}
+					for _, p := range policies {
+						available = append(available, p.LogicalID)
+					}
+					return fmt.Errorf("resource %q not found; available IAM resources: %s", resource, strings.Join(available, ", "))
+				}
+				roles = filteredRoles
+				policies = filteredPolicies
+			}
+
+			if len(roles) == 0 && len(policies) == 0 {
+				fmt.Println("No IAM role or policy resources found in template")
+				return nil
 			}
 
 			hasBlocked := false
-			for i, role := range roles {
-				if i > 0 {
+			sectionIdx := 0
+			for _, role := range roles {
+				if sectionIdx > 0 {
 					fmt.Println()
 					fmt.Println(strings.Repeat("=", 80))
 					fmt.Println()
@@ -87,6 +111,23 @@ skipped with a warning since they cannot be resolved without stack parameters.`,
 				if blocked {
 					hasBlocked = true
 				}
+				sectionIdx++
+			}
+
+			for _, pol := range policies {
+				if sectionIdx > 0 {
+					fmt.Println()
+					fmt.Println(strings.Repeat("=", 80))
+					fmt.Println()
+				}
+				blocked, err := checkCfPolicy(cmd, pol, format)
+				if err != nil {
+					return fmt.Errorf("checking policy %q: %w", pol.LogicalID, err)
+				}
+				if blocked {
+					hasBlocked = true
+				}
+				sectionIdx++
 			}
 
 			if hasBlocked {
@@ -99,7 +140,7 @@ skipped with a warning since they cannot be resolved without stack parameters.`,
 	cmd.Flags().String("pb", "", "Path to the permission boundary file (if omitted, resolves from template)")
 	cmd.Flags().String("output", "list", "Output format: list or json")
 	cmd.Flags().String("profile", "", "AWS profile to use")
-	cmd.Flags().String("resource", "", "Logical ID of a specific IAM role resource to check")
+	cmd.Flags().String("resource", "", "Logical ID of a specific IAM resource to check (role or policy)")
 
 	return cmd
 }
@@ -332,6 +373,109 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 		}
 		fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
 			len(allowedActions), len(blockedActions), len(denyActions), len(allNotActionStmts))
+	}
+
+	return len(blockedActions) > 0, nil
+}
+
+func checkCfPolicy(cmd *cobra.Command, pol cfn.IAMPolicyResource, format string) (bool, error) {
+	if !cmd.Flags().Changed("pb") {
+		return false, fmt.Errorf("policy %q (%s) requires --pb to specify a permission boundary", pol.LogicalID, pol.Type)
+	}
+
+	pbFile, _ := cmd.Flags().GetString("pb")
+	pb, err := boundary.LoadFromFile(pbFile)
+	if err != nil {
+		return false, fmt.Errorf("loading permission boundary: %w", err)
+	}
+
+	extracted := policy.ExtractActions(pol.PolicyDocument)
+
+	if len(extracted.AllowActions) == 0 && len(extracted.DenyActions) == 0 && len(extracted.NotActionStmts) == 0 {
+		fmt.Fprintf(os.Stderr, "Resource %s (%s): no actions found\n", pol.LogicalID, pol.Type)
+		return false, nil
+	}
+
+	var allowedActions, blockedActions []string
+	for _, action := range extracted.AllowActions {
+		if boundary.IsActionAllowed(action, pb) {
+			allowedActions = append(allowedActions, action)
+		} else {
+			blockedActions = append(blockedActions, action)
+		}
+	}
+	sort.Strings(allowedActions)
+	sort.Strings(blockedActions)
+
+	var notActionSummaries []string
+	for _, nas := range extracted.NotActionStmts {
+		summary := fmt.Sprintf("Effect=%s NotAction=[%s]", nas.Effect, strings.Join(nas.NotActions, ", "))
+		if nas.Condition != nil {
+			summary += " (has Condition)"
+		}
+		notActionSummaries = append(notActionSummaries, summary)
+	}
+
+	switch format {
+	case "json":
+		warnings := policy.Warnings(extracted, true)
+		blockedDetail := make([]map[string]string, 0, len(blockedActions))
+		for _, a := range blockedActions {
+			blockedDetail = append(blockedDetail, map[string]string{
+				"action": a,
+			})
+		}
+		result := map[string]interface{}{
+			"resource":              pol.LogicalID,
+			"resource_type":         pol.Type,
+			"evaluation_method":     pb.EvaluationMethod,
+			"allowed":               policy.NullableStringSlice(allowedActions),
+			"blocked":               blockedDetail,
+			"skipped_deny":          policy.NullableStringSlice(extracted.DenyActions),
+			"not_action_statements": policy.NullableStringSlice(notActionSummaries),
+			"warnings":              warnings,
+			"summary": map[string]int{
+				"allowed":               len(allowedActions),
+				"blocked":               len(blockedActions),
+				"skipped_deny":          len(extracted.DenyActions),
+				"not_action_statements": len(extracted.NotActionStmts),
+			},
+		}
+		out, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(out))
+
+	default: // list
+		warnings := policy.Warnings(extracted, false)
+		fmt.Fprintf(os.Stderr, "Resource: %s (%s)\n", pol.LogicalID, pol.Type)
+		fmt.Fprintf(os.Stderr, "Evaluation method: %s\n", pb.EvaluationMethod)
+		fmt.Fprintln(os.Stderr)
+		printWarnings(warnings, os.Stderr)
+		if len(allowedActions) > 0 {
+			fmt.Println("🟢  Allowed actions:")
+			for _, a := range allowedActions {
+				fmt.Printf("    %s\n", a)
+			}
+		}
+		if len(blockedActions) > 0 {
+			fmt.Println("\n🔴  Blocked actions (not allowed by permission boundary):")
+			for _, a := range blockedActions {
+				fmt.Printf("    %s\n", a)
+			}
+		}
+		if len(extracted.DenyActions) > 0 {
+			fmt.Println("\n🟡  Skipped actions (explicitly denied by policy):")
+			for _, a := range extracted.DenyActions {
+				fmt.Printf("    %s\n", a)
+			}
+		}
+		if len(notActionSummaries) > 0 {
+			fmt.Println("\n🟠  NotAction statements (requires manual review):")
+			for _, s := range notActionSummaries {
+				fmt.Printf("    %s\n", s)
+			}
+		}
+		fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
+			len(allowedActions), len(blockedActions), len(extracted.DenyActions), len(extracted.NotActionStmts))
 	}
 
 	return len(blockedActions) > 0, nil

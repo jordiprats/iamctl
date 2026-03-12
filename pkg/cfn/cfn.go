@@ -33,6 +33,13 @@ type IAMRole struct {
 	Properties IAMRoleProperties
 }
 
+// IAMPolicyResource represents an AWS::IAM::Policy or AWS::IAM::ManagedPolicy extracted from a template.
+type IAMPolicyResource struct {
+	LogicalID      string
+	Type           string // "AWS::IAM::Policy" or "AWS::IAM::ManagedPolicy"
+	PolicyDocument policy.PolicyDocument
+}
+
 // ParseTemplate reads and parses a CloudFormation YAML/JSON template.
 func ParseTemplate(path string) (*Template, error) {
 	data, err := os.ReadFile(path)
@@ -137,4 +144,58 @@ func parseRoleProperties(node *yaml.Node) (*IAMRoleProperties, error) {
 	}
 
 	return props, nil
+}
+
+// ExtractIAMPolicies finds all AWS::IAM::Policy and AWS::IAM::ManagedPolicy resources in the template.
+func ExtractIAMPolicies(tmpl *Template) ([]IAMPolicyResource, error) {
+	var policies []IAMPolicyResource
+	for logicalID, res := range tmpl.Resources {
+		if res.Type != "AWS::IAM::Policy" && res.Type != "AWS::IAM::ManagedPolicy" {
+			continue
+		}
+
+		doc, err := parsePolicyResource(&res.Properties)
+		if err != nil {
+			return nil, fmt.Errorf("parsing policy %q: %w", logicalID, err)
+		}
+		if doc == nil {
+			continue
+		}
+
+		policies = append(policies, IAMPolicyResource{
+			LogicalID:      logicalID,
+			Type:           res.Type,
+			PolicyDocument: *doc,
+		})
+	}
+	return policies, nil
+}
+
+// parsePolicyResource extracts the PolicyDocument from an AWS::IAM::Policy or AWS::IAM::ManagedPolicy.
+func parsePolicyResource(node *yaml.Node) (*policy.PolicyDocument, error) {
+	if node == nil || node.Kind == 0 {
+		return nil, nil
+	}
+
+	var raw map[string]interface{}
+	if err := node.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decoding properties: %w", err)
+	}
+
+	docRaw, ok := raw["PolicyDocument"]
+	if !ok {
+		return nil, nil
+	}
+
+	jsonBytes, err := json.Marshal(docRaw)
+	if err != nil {
+		return nil, fmt.Errorf("marshalling policy document: %w", err)
+	}
+
+	var doc policy.PolicyDocument
+	if err := json.Unmarshal(jsonBytes, &doc); err != nil {
+		return nil, fmt.Errorf("parsing policy document: %w", err)
+	}
+
+	return &doc, nil
 }
