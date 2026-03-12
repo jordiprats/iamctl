@@ -77,13 +77,38 @@ func TestExtractIAMRoles_IntrinsicFunctions(t *testing.T) {
 	}
 	role := roles[0]
 	if len(role.Properties.ManagedPolicyArns) != 1 {
-		t.Errorf("expected 1 ARN, got %d", len(role.Properties.ManagedPolicyArns))
+		t.Errorf("expected 1 resolved ARN, got %d", len(role.Properties.ManagedPolicyArns))
+	}
+	if len(role.Properties.ManagedPolicyArnsRaw) != 1 {
+		t.Errorf("expected 1 unresolved ARN, got %d", len(role.Properties.ManagedPolicyArnsRaw))
 	}
 	if role.Properties.PermissionBoundary != "" {
-		t.Errorf("expected empty PB, got %q", role.Properties.PermissionBoundary)
+		t.Errorf("expected empty PB string, got %q", role.Properties.PermissionBoundary)
+	}
+	if role.Properties.PermissionBoundaryRaw == nil {
+		t.Error("expected PermissionBoundaryRaw to be non-nil")
 	}
 	if len(role.Properties.InlinePolicies) != 1 {
 		t.Errorf("expected 1 inline policy, got %d", len(role.Properties.InlinePolicies))
+	}
+
+	// Resolve the intrinsic PB with test variables
+	vars := map[string]string{"AWS::AccountId": "123456789012"}
+	resolved, err := ResolveIntrinsic(role.Properties.PermissionBoundaryRaw, vars)
+	if err != nil {
+		t.Fatalf("ResolveIntrinsic PB: %v", err)
+	}
+	if resolved != "arn:aws:iam::123456789012:policy/MyBoundary" {
+		t.Errorf("unexpected resolved PB: %s", resolved)
+	}
+
+	// Resolve the intrinsic ManagedPolicyArn
+	resolvedArn, err := ResolveIntrinsic(role.Properties.ManagedPolicyArnsRaw[0], vars)
+	if err != nil {
+		t.Fatalf("ResolveIntrinsic ARN: %v", err)
+	}
+	if resolvedArn != "arn:aws:iam::123456789012:policy/CustomPolicy" {
+		t.Errorf("unexpected resolved ARN: %s", resolvedArn)
 	}
 }
 
@@ -160,5 +185,70 @@ func TestExtractIAMPolicies_NoMatch(t *testing.T) {
 	}
 	if len(policies) != 0 {
 		t.Errorf("expected 0 policies from role-only template, got %d", len(policies))
+	}
+}
+
+func TestResolveIntrinsic_FnJoin(t *testing.T) {
+	vars := map[string]string{"AWS::AccountId": "111222333444", "AWS::Region": "us-west-2"}
+	value := map[string]interface{}{
+		"Fn::Join": []interface{}{
+			"",
+			[]interface{}{
+				"arn:aws:iam::",
+				map[string]interface{}{"Ref": "AWS::AccountId"},
+				":policy/MyBoundary",
+			},
+		},
+	}
+	result, err := ResolveIntrinsic(value, vars)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "arn:aws:iam::111222333444:policy/MyBoundary" {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestResolveIntrinsic_FnSub(t *testing.T) {
+	vars := map[string]string{"AWS::AccountId": "111222333444"}
+	value := map[string]interface{}{
+		"Fn::Sub": "arn:aws:iam::${AWS::AccountId}:policy/MyBoundary",
+	}
+	result, err := ResolveIntrinsic(value, vars)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "arn:aws:iam::111222333444:policy/MyBoundary" {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestResolveIntrinsic_Ref(t *testing.T) {
+	vars := map[string]string{"AWS::AccountId": "111222333444"}
+	value := map[string]interface{}{"Ref": "AWS::AccountId"}
+	result, err := ResolveIntrinsic(value, vars)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "111222333444" {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestResolveIntrinsic_String(t *testing.T) {
+	result, err := ResolveIntrinsic("plain-string", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "plain-string" {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestResolveIntrinsic_UnresolvedRef(t *testing.T) {
+	value := map[string]interface{}{"Ref": "SomeParameter"}
+	_, err := ResolveIntrinsic(value, map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for unresolved Ref")
 	}
 }

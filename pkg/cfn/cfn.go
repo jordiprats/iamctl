@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jordiprats/iam-pb-check/pkg/policy"
 	"gopkg.in/yaml.v3"
@@ -22,9 +23,11 @@ type Resource struct {
 
 // IAMRoleProperties holds the relevant properties of an AWS::IAM::Role resource.
 type IAMRoleProperties struct {
-	ManagedPolicyArns  []string
-	InlinePolicies     map[string]policy.PolicyDocument // policy name -> document
-	PermissionBoundary string                           // resolved ARN or empty
+	ManagedPolicyArns     []string
+	ManagedPolicyArnsRaw  []interface{}                    // unresolved intrinsic entries
+	InlinePolicies        map[string]policy.PolicyDocument // policy name -> document
+	PermissionBoundary    string                           // resolved ARN or empty
+	PermissionBoundaryRaw interface{}                      // raw intrinsic value when not a string
 }
 
 // IAMRole is a named IAM role extracted from a CloudFormation template.
@@ -98,8 +101,10 @@ func parseRoleProperties(node *yaml.Node) (*IAMRoleProperties, error) {
 			for _, v := range arnList {
 				if s, ok := v.(string); ok {
 					props.ManagedPolicyArns = append(props.ManagedPolicyArns, s)
+				} else {
+					// Store intrinsic function entries for later resolution
+					props.ManagedPolicyArnsRaw = append(props.ManagedPolicyArnsRaw, v)
 				}
-				// Intrinsic function values (maps) are silently skipped
 			}
 		}
 	}
@@ -108,8 +113,10 @@ func parseRoleProperties(node *yaml.Node) (*IAMRoleProperties, error) {
 	if pb, ok := raw["PermissionsBoundary"]; ok {
 		if s, ok := pb.(string); ok {
 			props.PermissionBoundary = s
+		} else {
+			// Store raw intrinsic function value for later resolution
+			props.PermissionBoundaryRaw = pb
 		}
-		// Intrinsic function values (maps) are silently skipped
 	}
 
 	// Extract inline Policies
@@ -169,6 +176,64 @@ func ExtractIAMPolicies(tmpl *Template) ([]IAMPolicyResource, error) {
 		})
 	}
 	return policies, nil
+}
+
+// ResolveIntrinsic attempts to resolve a CloudFormation intrinsic function value
+// (such as Fn::Join, Ref, Fn::Sub) using the provided variable map.
+// The vars map should contain pseudo-parameter values like "AWS::AccountId".
+func ResolveIntrinsic(value interface{}, vars map[string]string) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return v, nil
+	case map[string]interface{}:
+		if joinArgs, ok := v["Fn::Join"]; ok {
+			args, ok := joinArgs.([]interface{})
+			if !ok || len(args) != 2 {
+				return "", fmt.Errorf("Fn::Join requires a 2-element array")
+			}
+			sep, ok := args[0].(string)
+			if !ok {
+				return "", fmt.Errorf("Fn::Join separator must be a string")
+			}
+			parts, ok := args[1].([]interface{})
+			if !ok {
+				return "", fmt.Errorf("Fn::Join values must be an array")
+			}
+			var resolved []string
+			for _, p := range parts {
+				s, err := ResolveIntrinsic(p, vars)
+				if err != nil {
+					return "", err
+				}
+				resolved = append(resolved, s)
+			}
+			return strings.Join(resolved, sep), nil
+		}
+		if ref, ok := v["Ref"]; ok {
+			refName, ok := ref.(string)
+			if !ok {
+				return "", fmt.Errorf("Ref value must be a string")
+			}
+			if val, ok := vars[refName]; ok {
+				return val, nil
+			}
+			return "", fmt.Errorf("unresolved Ref: %s", refName)
+		}
+		if sub, ok := v["Fn::Sub"]; ok {
+			subStr, ok := sub.(string)
+			if !ok {
+				return "", fmt.Errorf("Fn::Sub value must be a string")
+			}
+			result := subStr
+			for k, val := range vars {
+				result = strings.ReplaceAll(result, "${"+k+"}", val)
+			}
+			return result, nil
+		}
+		return "", fmt.Errorf("unsupported intrinsic function")
+	default:
+		return "", fmt.Errorf("cannot resolve value of type %T", value)
+	}
 }
 
 // parsePolicyResource extracts the PolicyDocument from an AWS::IAM::Policy or AWS::IAM::ManagedPolicy.

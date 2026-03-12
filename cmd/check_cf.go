@@ -28,14 +28,14 @@ Supported resource types:
 The permission boundary is resolved in order:
   1. --pb flag (explicit file)
   2. PermissionsBoundary property from roles in the template (fetched from AWS by ARN)
+  3. PermissionsBoundary with intrinsic functions (resolved using STS caller identity)
 
 For standalone policies (AWS::IAM::Policy, AWS::IAM::ManagedPolicy), --pb is required.
 
 Managed policy ARNs from ManagedPolicyArns are fetched from AWS.
-Inline policies from the Policies property are parsed directly.
-
-CloudFormation intrinsic functions (Ref, Fn::Join, etc.) in ARN values are
-skipped with a warning since they cannot be resolved without stack parameters.`,
+Intrinsic functions (Fn::Join, Ref, Fn::Sub) in ARN values are resolved
+automatically using STS GetCallerIdentity for the AWS account ID.
+Inline policies from the Policies property are parsed directly.`,
 		Args: cobra.ExactArgs(1),
 		Example: `  iam-pb-check check-cf template.yaml
   iam-pb-check check-cf --pb boundary.json template.yaml
@@ -149,8 +149,8 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 	ctx := cmd.Context()
 
 	// Create IAM client if we need to fetch anything from AWS
-	needsAWS := len(role.Properties.ManagedPolicyArns) > 0
-	if !cmd.Flags().Changed("pb") && role.Properties.PermissionBoundary != "" {
+	needsAWS := len(role.Properties.ManagedPolicyArns) > 0 || len(role.Properties.ManagedPolicyArnsRaw) > 0
+	if !cmd.Flags().Changed("pb") && (role.Properties.PermissionBoundary != "" || role.Properties.PermissionBoundaryRaw != nil) {
 		needsAWS = true
 	}
 
@@ -177,6 +177,28 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 		pbArn := role.Properties.PermissionBoundary
 		fmt.Fprintf(os.Stderr, "Fetching permission boundary from template ARN: %s\n", pbArn)
 		var err error
+		pb, err = boundary.FetchManagedPolicyAsBoundary(ctx, iamClient, pbArn)
+		if err != nil {
+			return false, fmt.Errorf("fetching permission boundary %q: %w", pbArn, err)
+		}
+	} else if role.Properties.PermissionBoundaryRaw != nil {
+		// Resolve intrinsic function using AWS pseudo-parameters
+		fmt.Fprintf(os.Stderr, "Resolving PermissionsBoundary intrinsic function...\n")
+		pseudoParams, err := boundary.GetAWSPseudoParams(ctx, profile)
+		if err != nil {
+			return false, fmt.Errorf("fetching AWS context for intrinsic resolution: %w (use --pb to provide it manually)", err)
+		}
+		pbArn, err := cfn.ResolveIntrinsic(role.Properties.PermissionBoundaryRaw, pseudoParams)
+		if err != nil {
+			return false, fmt.Errorf("resolving PermissionsBoundary intrinsic for role %q: %w (use --pb to provide it manually)", role.LogicalID, err)
+		}
+		fmt.Fprintf(os.Stderr, "Resolved permission boundary ARN: %s\n", pbArn)
+		if iamClient == nil {
+			iamClient, err = boundary.NewIAMClient(ctx, profile)
+			if err != nil {
+				return false, err
+			}
+		}
 		pb, err = boundary.FetchManagedPolicyAsBoundary(ctx, iamClient, pbArn)
 		if err != nil {
 			return false, fmt.Errorf("fetching permission boundary %q: %w", pbArn, err)
@@ -216,6 +238,25 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 
 	// Fetch and process managed policies from AWS
 	var managedPolicyNames []string
+
+	// Resolve any intrinsic function ARNs in ManagedPolicyArns
+	if len(role.Properties.ManagedPolicyArnsRaw) > 0 {
+		pseudoParams, err := boundary.GetAWSPseudoParams(ctx, profile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not resolve intrinsic ManagedPolicyArns: %v\n", err)
+		} else {
+			for _, raw := range role.Properties.ManagedPolicyArnsRaw {
+				resolved, err := cfn.ResolveIntrinsic(raw, pseudoParams)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: skipping unresolvable ManagedPolicyArn: %v\n", err)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "Resolved ManagedPolicyArn: %s\n", resolved)
+				role.Properties.ManagedPolicyArns = append(role.Properties.ManagedPolicyArns, resolved)
+			}
+		}
+	}
+
 	for _, arn := range role.Properties.ManagedPolicyArns {
 		fmt.Fprintf(os.Stderr, "Fetching managed policy: %s\n", arn)
 		doc, err := boundary.FetchManagedPolicy(ctx, iamClient, arn)

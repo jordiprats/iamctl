@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/jordiprats/iam-pb-check/pkg/policy"
 )
 
@@ -31,6 +32,31 @@ func NewIAMClient(ctx context.Context, profile string) (IAMClient, error) {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
 	return iam.NewFromConfig(cfg), nil
+}
+
+// GetAWSPseudoParams fetches AWS pseudo-parameter values (AccountId, Region)
+// using the current credentials. Returns a map suitable for cfn.ResolveIntrinsic.
+func GetAWSPseudoParams(ctx context.Context, profile string) (map[string]string, error) {
+	var opts []func(*config.LoadOptions) error
+	if profile != "" {
+		opts = append(opts, config.WithSharedConfigProfile(profile))
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+
+	stsClient := sts.NewFromConfig(cfg)
+	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return nil, fmt.Errorf("getting caller identity: %w", err)
+	}
+
+	params := map[string]string{
+		"AWS::AccountId": *identity.Account,
+		"AWS::Region":    cfg.Region,
+	}
+	return params, nil
 }
 
 // FetchRoleBoundary fetches the permission boundary attached to a role via the AWS API.
