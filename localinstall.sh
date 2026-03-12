@@ -8,6 +8,8 @@ go build -o dist/iam-pb-check main.go
 # Run tests
 bash test.sh
 
+echo "Binary built and tests passed. Installing to $HOME/local/bin..."
+
 # Install
 mkdir -p $HOME/local/bin
 mv dist/iam-pb-check $HOME/local/bin/iam-pb-check
