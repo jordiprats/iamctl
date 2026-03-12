@@ -1,0 +1,338 @@
+package cmd
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+
+	"github.com/jordiprats/iam-pb-check/pkg/boundary"
+	"github.com/jordiprats/iam-pb-check/pkg/cfn"
+	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"github.com/spf13/cobra"
+)
+
+func newCheckCfCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "check-cf <template-file>",
+		Short: "Parse a CloudFormation template and check IAM role actions against the permission boundary",
+		Long: `Parse a CloudFormation template, extract IAM roles, fetch their managed policies
+from AWS, and evaluate all actions against the permission boundary.
+
+The permission boundary is resolved in order:
+  1. --pb flag (explicit file)
+  2. PermissionsBoundary property from the template (fetched from AWS by ARN)
+
+Managed policy ARNs from ManagedPolicyArns are fetched from AWS.
+Inline policies from the Policies property are parsed directly.
+
+CloudFormation intrinsic functions (Ref, Fn::Join, etc.) in ARN values are
+skipped with a warning since they cannot be resolved without stack parameters.`,
+		Args: cobra.ExactArgs(1),
+		Example: `  iam-pb-check check-cf template.yaml
+  iam-pb-check check-cf --pb boundary.json template.yaml
+  iam-pb-check check-cf --resource LambdaRole template.yaml
+  iam-pb-check check-cf --profile staging --output json template.yaml`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			format, _ := cmd.Flags().GetString("output")
+			profile, _ := cmd.Flags().GetString("profile")
+			resource, _ := cmd.Flags().GetString("resource")
+			templateFile := args[0]
+
+			tmpl, err := cfn.ParseTemplate(templateFile)
+			if err != nil {
+				return err
+			}
+
+			roles, err := cfn.ExtractIAMRoles(tmpl)
+			if err != nil {
+				return err
+			}
+
+			if len(roles) == 0 {
+				fmt.Println("No AWS::IAM::Role resources found in template")
+				return nil
+			}
+
+			// Filter to a specific resource if requested
+			if resource != "" {
+				var filtered []cfn.IAMRole
+				for _, r := range roles {
+					if r.LogicalID == resource {
+						filtered = append(filtered, r)
+					}
+				}
+				if len(filtered) == 0 {
+					available := make([]string, len(roles))
+					for i, r := range roles {
+						available[i] = r.LogicalID
+					}
+					return fmt.Errorf("resource %q not found; available IAM roles: %s", resource, strings.Join(available, ", "))
+				}
+				roles = filtered
+			}
+
+			hasBlocked := false
+			for i, role := range roles {
+				if i > 0 {
+					fmt.Println()
+					fmt.Println(strings.Repeat("=", 80))
+					fmt.Println()
+				}
+				blocked, err := checkCfRole(cmd, role, format, profile)
+				if err != nil {
+					return fmt.Errorf("checking role %q: %w", role.LogicalID, err)
+				}
+				if blocked {
+					hasBlocked = true
+				}
+			}
+
+			if hasBlocked {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().String("pb", "", "Path to the permission boundary file (if omitted, resolves from template)")
+	cmd.Flags().String("output", "list", "Output format: list or json")
+	cmd.Flags().String("profile", "", "AWS profile to use")
+	cmd.Flags().String("resource", "", "Logical ID of a specific IAM role resource to check")
+
+	return cmd
+}
+
+func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (bool, error) {
+	ctx := cmd.Context()
+
+	// Create IAM client if we need to fetch anything from AWS
+	needsAWS := len(role.Properties.ManagedPolicyArns) > 0
+	if !cmd.Flags().Changed("pb") && role.Properties.PermissionBoundary != "" {
+		needsAWS = true
+	}
+
+	var iamClient boundary.IAMClient
+	if needsAWS {
+		var err error
+		iamClient, err = boundary.NewIAMClient(ctx, profile)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	// Resolve permission boundary
+	var pb *boundary.PermissionBoundary
+	if cmd.Flags().Changed("pb") {
+		pbFile, _ := cmd.Flags().GetString("pb")
+		var err error
+		pb, err = boundary.LoadFromFile(pbFile)
+		if err != nil {
+			return false, fmt.Errorf("loading permission boundary: %w", err)
+		}
+	} else if role.Properties.PermissionBoundary != "" {
+		// Fetch the PB from AWS using the ARN in the template
+		pbArn := role.Properties.PermissionBoundary
+		fmt.Fprintf(os.Stderr, "Fetching permission boundary from template ARN: %s\n", pbArn)
+		var err error
+		pb, err = boundary.FetchManagedPolicyAsBoundary(ctx, iamClient, pbArn)
+		if err != nil {
+			return false, fmt.Errorf("fetching permission boundary %q: %w", pbArn, err)
+		}
+	} else {
+		return false, fmt.Errorf("role %q has no PermissionsBoundary in template and --pb was not provided", role.LogicalID)
+	}
+
+	// Collect all policy actions
+	mergedAllow := make(map[string]string) // action -> source name
+	mergedDeny := make(map[string]string)
+	var allNotActionStmts []policy.NotActionStatement
+	hasWildcards := false
+	hasConditions := false
+	hasNotResources := false
+
+	// Process inline policies from the template
+	for policyName, doc := range role.Properties.InlinePolicies {
+		extracted := policy.ExtractActions(doc)
+		if extracted.HasWildcards {
+			hasWildcards = true
+		}
+		if extracted.HasConditions {
+			hasConditions = true
+		}
+		if extracted.HasNotResources {
+			hasNotResources = true
+		}
+		for _, a := range extracted.AllowActions {
+			mergedAllow[a] = policyName + " (inline)"
+		}
+		for _, a := range extracted.DenyActions {
+			mergedDeny[a] = policyName + " (inline)"
+		}
+		allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
+	}
+
+	// Fetch and process managed policies from AWS
+	var managedPolicyNames []string
+	for _, arn := range role.Properties.ManagedPolicyArns {
+		fmt.Fprintf(os.Stderr, "Fetching managed policy: %s\n", arn)
+		doc, err := boundary.FetchManagedPolicy(ctx, iamClient, arn)
+		if err != nil {
+			return false, fmt.Errorf("fetching managed policy %q: %w", arn, err)
+		}
+		// Derive a short display name from the ARN
+		policyName := arn
+		if parts := strings.Split(arn, "/"); len(parts) > 0 {
+			policyName = parts[len(parts)-1]
+		}
+		managedPolicyNames = append(managedPolicyNames, policyName)
+
+		extracted := policy.ExtractActions(*doc)
+		if extracted.HasWildcards {
+			hasWildcards = true
+		}
+		if extracted.HasConditions {
+			hasConditions = true
+		}
+		if extracted.HasNotResources {
+			hasNotResources = true
+		}
+		for _, a := range extracted.AllowActions {
+			mergedAllow[a] = policyName
+		}
+		for _, a := range extracted.DenyActions {
+			mergedDeny[a] = policyName
+		}
+		allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
+	}
+
+	mergedExtracted := policy.ExtractedActions{
+		HasWildcards:    hasWildcards,
+		HasConditions:   hasConditions,
+		HasNotResources: hasNotResources,
+		NotActionStmts:  allNotActionStmts,
+	}
+
+	// Sort actions
+	var allowActions []string
+	for a := range mergedAllow {
+		allowActions = append(allowActions, a)
+	}
+	sort.Strings(allowActions)
+
+	var denyActions []string
+	for a := range mergedDeny {
+		denyActions = append(denyActions, a)
+	}
+	sort.Strings(denyActions)
+	mergedExtracted.AllowActions = allowActions
+	mergedExtracted.DenyActions = denyActions
+
+	totalPolicies := len(role.Properties.InlinePolicies) + len(role.Properties.ManagedPolicyArns)
+	if totalPolicies == 0 {
+		fmt.Fprintf(os.Stderr, "Role %s: no policies found\n", role.LogicalID)
+		return false, nil
+	}
+
+	// Evaluate against boundary
+	var allowedActions, blockedActions []string
+	for _, action := range allowActions {
+		if boundary.IsActionAllowed(action, pb) {
+			allowedActions = append(allowedActions, action)
+		} else {
+			blockedActions = append(blockedActions, action)
+		}
+	}
+	sort.Strings(allowedActions)
+	sort.Strings(blockedActions)
+
+	var notActionSummaries []string
+	for _, nas := range allNotActionStmts {
+		summary := fmt.Sprintf("Effect=%s NotAction=[%s]", nas.Effect, strings.Join(nas.NotActions, ", "))
+		if nas.Condition != nil {
+			summary += " (has Condition)"
+		}
+		notActionSummaries = append(notActionSummaries, summary)
+	}
+
+	// Build combined policy list for display
+	var allPolicyNames []string
+	for name := range role.Properties.InlinePolicies {
+		allPolicyNames = append(allPolicyNames, name+" (inline)")
+	}
+	allPolicyNames = append(allPolicyNames, managedPolicyNames...)
+	sort.Strings(allPolicyNames)
+
+	switch format {
+	case "json":
+		warnings := policy.Warnings(mergedExtracted, true)
+		blockedDetail := make([]map[string]string, 0, len(blockedActions))
+		for _, a := range blockedActions {
+			blockedDetail = append(blockedDetail, map[string]string{
+				"action": a,
+				"source": mergedAllow[a],
+			})
+		}
+		result := map[string]interface{}{
+			"resource":              role.LogicalID,
+			"evaluation_method":     pb.EvaluationMethod,
+			"policies":              allPolicyNames,
+			"allowed":               policy.NullableStringSlice(allowedActions),
+			"blocked":               blockedDetail,
+			"skipped_deny":          policy.NullableStringSlice(denyActions),
+			"not_action_statements": policy.NullableStringSlice(notActionSummaries),
+			"warnings":              warnings,
+			"summary": map[string]int{
+				"inline_policies":       len(role.Properties.InlinePolicies),
+				"managed_policies":      len(role.Properties.ManagedPolicyArns),
+				"allowed":               len(allowedActions),
+				"blocked":               len(blockedActions),
+				"skipped_deny":          len(denyActions),
+				"not_action_statements": len(allNotActionStmts),
+			},
+		}
+		out, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(out))
+
+	default: // list
+		warnings := policy.Warnings(mergedExtracted, false)
+		fmt.Fprintf(os.Stderr, "Resource: %s (AWS::IAM::Role)\n", role.LogicalID)
+		fmt.Fprintf(os.Stderr, "Evaluation method: %s\n", pb.EvaluationMethod)
+		fmt.Fprintf(os.Stderr, "Policies: %d inline, %d managed\n",
+			len(role.Properties.InlinePolicies), len(role.Properties.ManagedPolicyArns))
+		for _, name := range allPolicyNames {
+			fmt.Fprintf(os.Stderr, "  - %s\n", name)
+		}
+		fmt.Fprintln(os.Stderr)
+		printWarnings(warnings, os.Stderr)
+		if len(allowedActions) > 0 {
+			fmt.Println("🟢  Allowed actions:")
+			for _, a := range allowedActions {
+				fmt.Printf("    %-58s (from %s)\n", a, mergedAllow[a])
+			}
+		}
+		if len(blockedActions) > 0 {
+			fmt.Println("\n🔴  Blocked actions (not allowed by permission boundary):")
+			for _, a := range blockedActions {
+				fmt.Printf("    %-58s (from %s)\n", a, mergedAllow[a])
+			}
+		}
+		if len(denyActions) > 0 {
+			fmt.Println("\n🟡  Skipped actions (explicitly denied by policy):")
+			for _, a := range denyActions {
+				fmt.Printf("    %-58s (from %s)\n", a, mergedDeny[a])
+			}
+		}
+		if len(notActionSummaries) > 0 {
+			fmt.Println("\n🟠  NotAction statements (requires manual review):")
+			for _, s := range notActionSummaries {
+				fmt.Printf("    %s\n", s)
+			}
+		}
+		fmt.Printf("\nSummary: %d allowed, %d blocked, %d skipped (denied by policy), %d NotAction statement(s)\n",
+			len(allowedActions), len(blockedActions), len(denyActions), len(allNotActionStmts))
+	}
+
+	return len(blockedActions) > 0, nil
+}

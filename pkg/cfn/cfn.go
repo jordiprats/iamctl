@@ -1,0 +1,140 @@
+package cfn
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"gopkg.in/yaml.v3"
+)
+
+// Template represents a CloudFormation template with only the fields we need.
+type Template struct {
+	Resources map[string]Resource `yaml:"Resources"`
+}
+
+// Resource represents a CloudFormation resource.
+type Resource struct {
+	Type       string    `yaml:"Type"`
+	Properties yaml.Node `yaml:"Properties"`
+}
+
+// IAMRoleProperties holds the relevant properties of an AWS::IAM::Role resource.
+type IAMRoleProperties struct {
+	ManagedPolicyArns  []string
+	InlinePolicies     map[string]policy.PolicyDocument // policy name -> document
+	PermissionBoundary string                           // resolved ARN or empty
+}
+
+// IAMRole is a named IAM role extracted from a CloudFormation template.
+type IAMRole struct {
+	LogicalID  string
+	Properties IAMRoleProperties
+}
+
+// ParseTemplate reads and parses a CloudFormation YAML/JSON template.
+func ParseTemplate(path string) (*Template, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading template: %w", err)
+	}
+
+	var tmpl Template
+	if err := yaml.Unmarshal(data, &tmpl); err != nil {
+		return nil, fmt.Errorf("parsing template: %w", err)
+	}
+	return &tmpl, nil
+}
+
+// ExtractIAMRoles finds all AWS::IAM::Role resources in the template.
+func ExtractIAMRoles(tmpl *Template) ([]IAMRole, error) {
+	var roles []IAMRole
+	for logicalID, res := range tmpl.Resources {
+		if res.Type != "AWS::IAM::Role" {
+			continue
+		}
+
+		props, err := parseRoleProperties(&res.Properties)
+		if err != nil {
+			return nil, fmt.Errorf("parsing role %q: %w", logicalID, err)
+		}
+
+		roles = append(roles, IAMRole{
+			LogicalID:  logicalID,
+			Properties: *props,
+		})
+	}
+	return roles, nil
+}
+
+// parseRoleProperties extracts managed policy ARNs, inline policies, and permission boundary
+// from the raw YAML node of an IAM role's Properties.
+func parseRoleProperties(node *yaml.Node) (*IAMRoleProperties, error) {
+	if node == nil || node.Kind == 0 {
+		return &IAMRoleProperties{}, nil
+	}
+
+	// Decode into a generic map so we can handle intrinsic functions
+	var raw map[string]interface{}
+	if err := node.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decoding properties: %w", err)
+	}
+
+	props := &IAMRoleProperties{
+		InlinePolicies: make(map[string]policy.PolicyDocument),
+	}
+
+	// Extract ManagedPolicyArns
+	if arns, ok := raw["ManagedPolicyArns"]; ok {
+		if arnList, ok := arns.([]interface{}); ok {
+			for _, v := range arnList {
+				if s, ok := v.(string); ok {
+					props.ManagedPolicyArns = append(props.ManagedPolicyArns, s)
+				}
+				// Intrinsic function values (maps) are silently skipped
+			}
+		}
+	}
+
+	// Extract PermissionsBoundary
+	if pb, ok := raw["PermissionsBoundary"]; ok {
+		if s, ok := pb.(string); ok {
+			props.PermissionBoundary = s
+		}
+		// Intrinsic function values (maps) are silently skipped
+	}
+
+	// Extract inline Policies
+	if policies, ok := raw["Policies"]; ok {
+		if policyList, ok := policies.([]interface{}); ok {
+			for _, p := range policyList {
+				pMap, ok := p.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				name, _ := pMap["PolicyName"].(string)
+				if name == "" {
+					name = "unnamed"
+				}
+				docRaw, ok := pMap["PolicyDocument"]
+				if !ok {
+					continue
+				}
+				// Marshal to JSON then unmarshal to PolicyDocument
+				// This handles the type conversions from YAML's generic types
+				jsonBytes, err := json.Marshal(docRaw)
+				if err != nil {
+					continue
+				}
+				var doc policy.PolicyDocument
+				if err := json.Unmarshal(jsonBytes, &doc); err != nil {
+					continue
+				}
+				props.InlinePolicies[name] = doc
+			}
+		}
+	}
+
+	return props, nil
+}

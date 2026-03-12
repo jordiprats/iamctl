@@ -16,6 +16,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newCheckActionCmd())
 	root.AddCommand(newCheckPolicyCmd())
 	root.AddCommand(newCheckRoleCmd())
+	root.AddCommand(newCheckCfCmd())
 	root.AddCommand(newDiffCmd())
 
 	return root

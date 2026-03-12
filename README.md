@@ -9,7 +9,8 @@ This tool allows you to:
 1. **Single Action Check**: Verify if one or more AWS actions are allowed by your permission boundary.
 2. **Policy Validation**: Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked.
 3. **Role Check**: Fetch all managed policies attached to an IAM role and evaluate them against the permission boundary.
-4. **Diff**: Compare a policy against two permission boundaries to see what access would be gained or lost.
+4. **CloudFormation Check**: Parse a CloudFormation template, extract IAM roles, fetch their managed policies from AWS, and evaluate all actions against the permission boundary.
+5. **Diff**: Compare a policy against two permission boundaries to see what access would be gained or lost.
 
 ## Installation
 
@@ -141,6 +142,53 @@ iam-pb-check check-role --profile staging --output json my-role
 **Exit Codes:**
 - `0`: All actions are allowed
 - `1`: One or more actions are blocked
+
+---
+
+#### `check-cf` — Check a CloudFormation Template
+
+Parse a CloudFormation template, extract all `AWS::IAM::Role` resources, fetch their managed policies from AWS, and evaluate all actions (from both managed and inline policies) against the permission boundary.
+
+The permission boundary is resolved in order:
+1. `--pb` flag (explicit local file)
+2. `PermissionsBoundary` property from the template (fetched from AWS by ARN)
+
+CloudFormation intrinsic functions (`Ref`, `Fn::Join`, etc.) in ARN values cannot be resolved without stack parameters and are silently skipped.
+
+```bash
+iam-pb-check check-cf [options] <template-file>
+```
+
+**Options:**
+- `--pb <file>`: Path to permission boundary file (if omitted, resolves from the template's `PermissionsBoundary` property)
+- `--output <format>`: Output format — `list` or `json` (default: `list`)
+- `--profile <name>`: AWS profile to use
+- `--resource <logical-id>`: Check only a specific IAM role resource by its logical ID
+
+**Examples:**
+
+```bash
+# Check all IAM roles in a CloudFormation template
+iam-pb-check check-cf template.yaml
+
+# Override the permission boundary with a local file
+iam-pb-check check-cf --pb boundary.json template.yaml
+
+# Check a specific role resource by logical ID
+iam-pb-check check-cf --resource LambdaRole template.yaml
+
+# Use a specific AWS profile and JSON output
+iam-pb-check check-cf --profile staging --output json template.yaml
+```
+
+**What gets analyzed:**
+- **Managed policies** (`ManagedPolicyArns`): Each plain-string ARN is fetched from AWS and its actions are extracted
+- **Inline policies** (`Policies`): Policy documents are parsed directly from the YAML template
+- **Intrinsic function ARNs**: Skipped with a warning (e.g. `Fn::Join`, `Ref` in ARN values)
+
+**Exit Codes:**
+- `0`: All actions in all roles are allowed
+- `1`: One or more actions are blocked in any role
 
 ---
 

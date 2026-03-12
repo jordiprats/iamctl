@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Test Lambda Execution Role
+
+Parameters:
+  AccountType:
+    Type: String
+  RoleNameSuffix:
+    Type: String
+
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+      RoleName:
+        Fn::Join:
+          - ""
+          - - Ref: AccountType
+            - "-custom-"
+            - Ref: RoleNameSuffix
+      PermissionsBoundary: arn:aws:iam::123456789012:policy/MyBoundary
+      Policies:
+        - PolicyName: InlineAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - dynamodb:GetItem
+                Resource: "*"
+              - Effect: Deny
+                Action:
+                  - s3:DeleteBucket
+                Resource: "*"
+
+  AnotherRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      PermissionsBoundary: arn:aws:iam::123456789012:policy/MyBoundary
+      Policies:
+        - PolicyName: EC2ReadOnly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeSecurityGroups
+                Resource: "*"
+
+  NotARole:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: my-function

@@ -120,6 +120,18 @@ func FetchRolePolicies(ctx context.Context, client IAMClient, roleName string) (
 	return result, nil
 }
 
+// FetchManagedPolicyAsBoundary fetches a managed policy by ARN and returns it as a PermissionBoundary.
+func FetchManagedPolicyAsBoundary(ctx context.Context, client IAMClient, policyARN string) (*PermissionBoundary, error) {
+	doc, err := FetchManagedPolicy(ctx, client, policyARN)
+	if err != nil {
+		return nil, err
+	}
+	return &PermissionBoundary{
+		Policy:           doc,
+		EvaluationMethod: "Full IAM policy evaluation",
+	}, nil
+}
+
 // FetchManagedPolicy fetches the default version of a managed policy by ARN and returns its document.
 func FetchManagedPolicy(ctx context.Context, client IAMClient, policyARN string) (*policy.PolicyDocument, error) {
 	policyOut, err := client.GetPolicy(ctx, &iam.GetPolicyInput{
