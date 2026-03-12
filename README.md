@@ -6,11 +6,11 @@ A command-line tool for validating **AWS IAM actions** against **permission boun
 
 This tool allows you to:
 
-1. **Single Action Check**: Verify if one or more AWS actions are allowed by your permission boundary.
-2. **Policy Validation**: Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked.
-3. **Role Check**: Fetch all managed policies attached to an IAM role and evaluate them against the permission boundary.
-4. **CloudFormation Check**: Parse a CloudFormation template, extract IAM roles, fetch their managed policies from AWS, and evaluate all actions against the permission boundary.
-5. **Diff**: Compare a policy against two permission boundaries to see what access would be gained or lost.
+1. **Single Action Check** (`check-action`): Verify if one or more AWS actions are allowed by your permission boundary.
+2. **Policy Validation** (`check-policy`): Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked.
+3. **Role Check** (`check-role`): Fetch all managed policies attached to an IAM role and evaluate them against the permission boundary.
+4. **CloudFormation Check** (`check-cf`): Parse a CloudFormation template, extract IAM roles and policies, resolve intrinsic functions via STS, fetch managed policies from AWS, and evaluate all actions against the permission boundary.
+5. **Diff** (`diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
 
 ## Installation
 
