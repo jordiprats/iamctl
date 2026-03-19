@@ -14,9 +14,10 @@ import (
 
 func newCheckPolicyCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "check-policy [policy-file]",
-		Short: "Check which actions in a policy are allowed or blocked by the permission boundary",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     "check-policy [policy-file]",
+		Aliases: []string{"cp"},
+		Short:   "Check which actions in a policy are allowed or blocked by the permission boundary",
+		Args:    cobra.MaximumNArgs(1),
 		Example: `  iamctl check-policy --pb boundary.json policy.json
   iamctl check-policy --pb boundary.json --policy-file extra.json policy.json
   iamctl check-policy --pb boundary.json --policy-file a.json --policy-file b.json

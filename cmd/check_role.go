@@ -14,9 +14,10 @@ import (
 
 func newCheckRoleCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "check-role <role-name>",
-		Short: "Fetch managed policies for an IAM role and check which actions are blocked by the permission boundary",
-		Args:  cobra.ExactArgs(1),
+		Use:     "check-role <role-name>",
+		Aliases: []string{"cr"},
+		Short:   "Fetch managed policies for an IAM role and check which actions are blocked by the permission boundary",
+		Args:    cobra.ExactArgs(1),
 		Example: `  iamctl check-role my-role
   iamctl check-role --pb boundary.json --output json my-role
   iamctl check-role --profile staging my-role`,

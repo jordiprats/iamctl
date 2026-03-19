@@ -12,9 +12,10 @@ import (
 
 func newCheckActionCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "check-action <action> [action...]",
-		Short: "Check if one or more actions are allowed by the permission boundary",
-		Args:  cobra.MinimumNArgs(1),
+		Use:     "check-action <action> [action...]",
+		Aliases: []string{"ca"},
+		Short:   "Check if one or more actions are allowed by the permission boundary",
+		Args:    cobra.MinimumNArgs(1),
 		Example: `  iamctl check-action ec2:RunInstances
   iamctl check-action s3:PutObject s3:GetObject ec2:DescribeInstances
   iamctl check-action --pb boundary.json s3:PutObject

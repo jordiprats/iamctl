@@ -15,8 +15,9 @@ import (
 
 func newCheckCfCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "check-cf <template-file>",
-		Short: "Parse a CloudFormation template and check IAM roles and policies against the permission boundary",
+		Use:     "check-cf <template-file>",
+		Aliases: []string{"check-cloudformation", "ccf"},
+		Short:   "Parse a CloudFormation template and check IAM roles and policies against the permission boundary",
 		Long: `Parse a CloudFormation template, extract IAM roles and standalone IAM policies,
 fetch managed policies from AWS, and evaluate all actions against the permission boundary.
 

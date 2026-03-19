@@ -20,8 +20,9 @@ import (
 
 func newShrinkRolePoliciesCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "shrink-role-policies <role-name>",
-		Short: "Generate a minimal policy for a role by removing unused actions from its attached policies",
+		Use:     "shrink-role-policies <role-name>",
+		Aliases: []string{"shrink", "srp"},
+		Short:   "Generate a minimal policy for a role by removing unused actions from its attached policies",
 		Long: `Fetches all managed policies attached to the given role, then uses service last accessed
 data (at ACTION_LEVEL granularity) to identify which actions are actually being used.
 

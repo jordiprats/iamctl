@@ -12,8 +12,9 @@ import (
 
 func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "diff <policy-file>",
-		Short: "Compare policy actions against two permission boundaries to show what changes",
+		Use:     "diff <policy-file>",
+		Aliases: []string{"compare", "cmp"},
+		Short:   "Compare policy actions against two permission boundaries to show what changes",
 		Long: `Loads two permission boundaries (--pb and --pb-new) and reports which Allow actions
 in the given policy would gain or lose access when switching from the old to the new boundary.`,
 		Args: cobra.ExactArgs(1),
