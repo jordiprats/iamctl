@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jordiprats/iam-pb-check/pkg/matcher"
+	"github.com/jordiprats/iamctl/pkg/matcher"
 )
 
 // PolicyDocument represents an IAM policy document.

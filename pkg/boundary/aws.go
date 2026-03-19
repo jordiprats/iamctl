@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"github.com/jordiprats/iamctl/pkg/policy"
 )
 
 // IAMClient is the subset of the IAM API used by this package.

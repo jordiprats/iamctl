@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jordiprats/iam-pb-check/pkg/boundary"
-	"github.com/jordiprats/iam-pb-check/pkg/matcher"
+	"github.com/jordiprats/iamctl/pkg/boundary"
+	"github.com/jordiprats/iamctl/pkg/matcher"
 	"github.com/spf13/cobra"
 )
 

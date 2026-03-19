@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"github.com/jordiprats/iamctl/pkg/policy"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +24,7 @@ func newPolicyFromRoleUsageCmd() *cobra.Command {
   iamctl policy-from-role-usage --profile staging my-role`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profile, _ := cmd.Flags().GetString("profile")
+			quiet, _ := cmd.Flags().GetBool("quiet")
 			roleName := args[0]
 
 			ctx := cmd.Context()
@@ -60,7 +61,9 @@ func newPolicyFromRoleUsageCmd() *cobra.Command {
 			}
 
 			jobID := *genOut.JobId
-			fmt.Fprintf(os.Stderr, "Analyzing activity for role: %s\n", roleArn)
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Analyzing activity for role: %s\n", roleArn)
+			}
 
 			// Poll until the job completes
 			var details *iam.GetServiceLastAccessedDetailsOutput
@@ -84,6 +87,10 @@ func newPolicyFromRoleUsageCmd() *cobra.Command {
 				}
 			}
 
+			if !quiet {
+				printTrackingPeriod(details)
+			}
+
 			statements := buildStatementsFromAccessDetails(ctx, client, details, jobID)
 
 			if len(statements) == 0 {
@@ -102,6 +109,7 @@ func newPolicyFromRoleUsageCmd() *cobra.Command {
 	}
 
 	cmd.Flags().String("profile", "", "AWS profile to use")
+	cmd.Flags().BoolP("quiet", "q", false, "Suppress informational output, print only the policy JSON")
 
 	return cmd
 }
@@ -164,4 +172,29 @@ func valueOrEmpty(err *iamtypes.ErrorDetails) string {
 		return *err.Message
 	}
 	return ""
+}
+
+// printTrackingPeriod prints the time range covered by the service last accessed data.
+func printTrackingPeriod(details *iam.GetServiceLastAccessedDetailsOutput) {
+	var oldest, newest time.Time
+
+	for _, svc := range details.ServicesLastAccessed {
+		if svc.LastAuthenticated == nil {
+			continue
+		}
+		t := *svc.LastAuthenticated
+		if oldest.IsZero() || t.Before(oldest) {
+			oldest = t
+		}
+		if newest.IsZero() || t.After(newest) {
+			newest = t
+		}
+	}
+
+	if !oldest.IsZero() {
+		days := int(time.Since(oldest).Hours() / 24)
+		fmt.Fprintf(os.Stderr, "Tracking period: %s to %s (~%d days)\n",
+			oldest.Format("2006-01-02"), newest.Format("2006-01-02"), days)
+	}
+	fmt.Fprintf(os.Stderr, "Note: AWS IAM tracks action-level usage for up to 400 days\n\n")
 }

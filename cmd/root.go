@@ -20,6 +20,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newDiffCmd())
 	root.AddCommand(newPolicyFromRoleUsageCmd())
 	root.AddCommand(newShrinkRolePoliciesCmd())
+	root.AddCommand(GenDocsCmd(root))
 
 	return root
 }

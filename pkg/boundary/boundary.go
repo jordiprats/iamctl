@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jordiprats/iam-pb-check/pkg/matcher"
-	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"github.com/jordiprats/iamctl/pkg/matcher"
+	"github.com/jordiprats/iamctl/pkg/policy"
 )
 
 // PermissionBoundary holds the loaded permission boundary.

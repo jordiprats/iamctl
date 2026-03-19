@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/jordiprats/iam-pb-check/cmd"
+	"github.com/jordiprats/iamctl/cmd"
 )
 
 var version = "dev"

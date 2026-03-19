@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jordiprats/iam-pb-check/pkg/boundary"
-	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"github.com/jordiprats/iamctl/pkg/boundary"
+	"github.com/jordiprats/iamctl/pkg/policy"
 	"github.com/spf13/cobra"
 )
 

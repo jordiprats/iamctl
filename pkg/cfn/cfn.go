@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"github.com/jordiprats/iamctl/pkg/policy"
 	"gopkg.in/yaml.v3"
 )
 

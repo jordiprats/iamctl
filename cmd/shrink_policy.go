@@ -12,9 +12,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/jordiprats/iam-pb-check/pkg/boundary"
-	"github.com/jordiprats/iam-pb-check/pkg/matcher"
-	"github.com/jordiprats/iam-pb-check/pkg/policy"
+	"github.com/jordiprats/iamctl/pkg/boundary"
+	"github.com/jordiprats/iamctl/pkg/matcher"
+	"github.com/jordiprats/iamctl/pkg/policy"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +32,7 @@ Deny statements, NotAction statements, Conditions, Resources, and Sids are prese
   iamctl shrink-role-policies --profile staging my-role`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profile, _ := cmd.Flags().GetString("profile")
+			quiet, _ := cmd.Flags().GetBool("quiet")
 			roleName := args[0]
 
 			ctx := cmd.Context()
@@ -59,7 +60,9 @@ Deny statements, NotAction statements, Conditions, Resources, and Sids are prese
 			roleArn := *roleOut.Role.Arn
 
 			// Fetch and merge the role's attached policies
-			fmt.Fprintf(os.Stderr, "Fetching policies for role: %s\n", roleArn)
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Fetching policies for role: %s\n", roleArn)
+			}
 			policies, err := boundary.FetchRolePolicies(ctx, client, roleName)
 			if err != nil {
 				return fmt.Errorf("fetching role policies: %w", err)
@@ -67,28 +70,35 @@ Deny statements, NotAction statements, Conditions, Resources, and Sids are prese
 			if len(policies) == 0 {
 				return fmt.Errorf("no managed policies attached to role %q", roleName)
 			}
-			fmt.Fprintf(os.Stderr, "Found %d attached policy/policies\n", len(policies))
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Found %d attached policy/policies\n", len(policies))
+			}
 			doc := mergePolicyDocs(policies)
 
 			// Fetch service last accessed data
-			accessedActions, err := fetchAccessedActions(ctx, client, roleArn)
+			accessedActions, accessedDetails, err := fetchAccessedActions(ctx, client, roleArn)
 			if err != nil {
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Actions observed in use: %d\n", len(accessedActions))
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Actions observed in use: %d\n", len(accessedActions))
+				printTrackingPeriod(accessedDetails)
+			}
 
 			// Shrink the policy
 			shrunk, removed := shrinkDocument(doc, accessedActions)
 
-			if len(removed) > 0 {
-				fmt.Fprintf(os.Stderr, "\nRemoved %d unused action(s):\n", len(removed))
-				for _, a := range removed {
-					fmt.Fprintf(os.Stderr, "  - %s\n", a)
+			if !quiet {
+				if len(removed) > 0 {
+					fmt.Fprintf(os.Stderr, "\nRemoved %d unused action(s):\n", len(removed))
+					for _, a := range removed {
+						fmt.Fprintf(os.Stderr, "  - %s\n", a)
+					}
+					fmt.Fprintln(os.Stderr)
+				} else {
+					fmt.Fprintln(os.Stderr, "No unused actions found — policy is already minimal.")
 				}
-				fmt.Fprintln(os.Stderr)
-			} else {
-				fmt.Fprintln(os.Stderr, "No unused actions found — policy is already minimal.")
 			}
 
 			enc := json.NewEncoder(os.Stdout)
@@ -98,19 +108,20 @@ Deny statements, NotAction statements, Conditions, Resources, and Sids are prese
 	}
 
 	cmd.Flags().String("profile", "", "AWS profile to use")
+	cmd.Flags().BoolP("quiet", "q", false, "Suppress informational output, print only the policy JSON")
 
 	return cmd
 }
 
 // fetchAccessedActions retrieves ACTION_LEVEL last accessed data for an ARN
 // and returns a set of lowercase "service:Action" strings that were actually used.
-func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (map[string]bool, error) {
+func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (map[string]bool, *iam.GetServiceLastAccessedDetailsOutput, error) {
 	genOut, err := client.GenerateServiceLastAccessedDetails(ctx, &iam.GenerateServiceLastAccessedDetailsInput{
 		Arn:         &arn,
 		Granularity: iamtypes.AccessAdvisorUsageGranularityTypeActionLevel,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("generating service last accessed details: %w", err)
+		return nil, nil, fmt.Errorf("generating service last accessed details: %w", err)
 	}
 
 	jobID := *genOut.JobId
@@ -121,17 +132,17 @@ func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (
 			JobId: &jobID,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("getting service last accessed details: %w", err)
+			return nil, nil, fmt.Errorf("getting service last accessed details: %w", err)
 		}
 		if details.JobStatus == iamtypes.JobStatusTypeCompleted {
 			break
 		}
 		if details.JobStatus == iamtypes.JobStatusTypeFailed {
-			return nil, fmt.Errorf("job failed: %s", valueOrEmpty(details.Error))
+			return nil, nil, fmt.Errorf("job failed: %s", valueOrEmpty(details.Error))
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		case <-time.After(1 * time.Second):
 		}
 	}
@@ -169,7 +180,7 @@ func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (
 		}
 	}
 
-	return accessed, nil
+	return accessed, details, nil
 }
 
 // shrinkDocument removes unused Allow actions from a policy document.
