@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -140,5 +141,49 @@ func TestSearchManagedPoliciesBySubstring_ListError(t *testing.T) {
 	_, err := SearchManagedPoliciesBySubstring(context.Background(), mock, "ops", iamtypes.PolicyScopeTypeAll, PolicySearchFilters{})
 	if err == nil {
 		t.Fatal("expected error from ListPolicies")
+	}
+}
+
+func TestDescribeRole_ListInlinePoliciesError(t *testing.T) {
+	createdAt := time.Now().Add(-1 * time.Hour)
+	mock := &mockIAMClient{
+		getRoleF: func(ctx context.Context, p *iam.GetRoleInput, o ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
+			return &iam.GetRoleOutput{Role: &iamtypes.Role{
+				RoleName:   aws.String("my-role"),
+				Arn:        aws.String("arn:aws:iam::123456789012:role/my-role"),
+				CreateDate: &createdAt,
+			}}, nil
+		},
+		listAttachedRolePoliciesF: func(ctx context.Context, p *iam.ListAttachedRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {
+			return &iam.ListAttachedRolePoliciesOutput{}, nil
+		},
+		listRolePoliciesF: func(ctx context.Context, p *iam.ListRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+			return nil, fmt.Errorf("list inline failed")
+		},
+	}
+
+	_, err := DescribeRole(context.Background(), mock, "my-role")
+	if err == nil {
+		t.Fatal("expected error from ListRolePolicies")
+	}
+}
+
+func TestDescribeManagedPolicy_GetPolicyVersionError(t *testing.T) {
+	mock := &mockIAMClient{
+		getPolicyF: func(ctx context.Context, p *iam.GetPolicyInput, o ...func(*iam.Options)) (*iam.GetPolicyOutput, error) {
+			return &iam.GetPolicyOutput{Policy: &iamtypes.Policy{
+				PolicyName:       aws.String("MyPolicy"),
+				Arn:              aws.String("arn:aws:iam::123456789012:policy/MyPolicy"),
+				DefaultVersionId: aws.String("v1"),
+			}}, nil
+		},
+		getPolicyVersionF: func(ctx context.Context, p *iam.GetPolicyVersionInput, o ...func(*iam.Options)) (*iam.GetPolicyVersionOutput, error) {
+			return nil, fmt.Errorf("version read failed")
+		},
+	}
+
+	_, err := DescribeManagedPolicy(context.Background(), mock, "arn:aws:iam::123456789012:policy/MyPolicy")
+	if err == nil {
+		t.Fatal("expected error from GetPolicyVersion")
 	}
 }

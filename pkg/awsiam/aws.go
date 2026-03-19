@@ -22,11 +22,38 @@ import (
 // IAMClient is the subset of the IAM API used by this package.
 type IAMClient interface {
 	GetRole(ctx context.Context, params *iam.GetRoleInput, optFns ...func(*iam.Options)) (*iam.GetRoleOutput, error)
+	GetRolePolicy(ctx context.Context, params *iam.GetRolePolicyInput, optFns ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error)
 	GetPolicy(ctx context.Context, params *iam.GetPolicyInput, optFns ...func(*iam.Options)) (*iam.GetPolicyOutput, error)
 	GetPolicyVersion(ctx context.Context, params *iam.GetPolicyVersionInput, optFns ...func(*iam.Options)) (*iam.GetPolicyVersionOutput, error)
 	ListAttachedRolePolicies(ctx context.Context, params *iam.ListAttachedRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+	ListRolePolicies(ctx context.Context, params *iam.ListRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error)
 	ListRoles(ctx context.Context, params *iam.ListRolesInput, optFns ...func(*iam.Options)) (*iam.ListRolesOutput, error)
 	ListPolicies(ctx context.Context, params *iam.ListPoliciesInput, optFns ...func(*iam.Options)) (*iam.ListPoliciesOutput, error)
+}
+
+// RoleDescription is a detailed role view for describe-role style output.
+type RoleDescription struct {
+	RoleName            string
+	ARN                 string
+	CreateDate          time.Time
+	SwitchRoleURL       string
+	LastUsedAt          *time.Time
+	MaxSessionDuration  int32
+	AttachedPolicyNames []string
+	InlinePolicies      map[string]policy.PolicyDocument
+}
+
+// PolicyDescription is a detailed managed policy view for describe-policy style output.
+type PolicyDescription struct {
+	Name             string
+	ARN              string
+	Description      string
+	Path             string
+	DefaultVersionID string
+	CreateDate       *time.Time
+	UpdateDate       *time.Time
+	IsAWSManaged     bool
+	Document         policy.PolicyDocument
 }
 
 // RoleSummary represents a minimal role identity.
@@ -223,6 +250,157 @@ func FetchManagedPolicy(ctx context.Context, client IAMClient, policyARN string)
 	}
 
 	return &doc, nil
+}
+
+// DescribeRole returns role summary plus managed and inline policies.
+func DescribeRole(ctx context.Context, client IAMClient, roleName string) (*RoleDescription, error) {
+	roleOut, err := client.GetRole(ctx, &iam.GetRoleInput{RoleName: &roleName})
+	if err != nil {
+		return nil, fmt.Errorf("getting role %q: %w", roleName, err)
+	}
+	if roleOut.Role == nil || roleOut.Role.Arn == nil || roleOut.Role.RoleName == nil || roleOut.Role.CreateDate == nil {
+		return nil, fmt.Errorf("role %q response missing required fields", roleName)
+	}
+
+	desc := &RoleDescription{
+		RoleName:           *roleOut.Role.RoleName,
+		ARN:                *roleOut.Role.Arn,
+		CreateDate:         *roleOut.Role.CreateDate,
+		MaxSessionDuration: 3600,
+		InlinePolicies:     map[string]policy.PolicyDocument{},
+	}
+	if roleOut.Role.MaxSessionDuration != nil {
+		desc.MaxSessionDuration = *roleOut.Role.MaxSessionDuration
+	}
+	if roleOut.Role.RoleLastUsed != nil && roleOut.Role.RoleLastUsed.LastUsedDate != nil {
+		v := *roleOut.Role.RoleLastUsed.LastUsedDate
+		desc.LastUsedAt = &v
+	}
+
+	accountID := extractAccountIDFromRoleARN(desc.ARN)
+	if accountID != "" {
+		desc.SwitchRoleURL = fmt.Sprintf(
+			"https://signin.aws.amazon.com/switchrole?roleName=%s&account=%s",
+			url.QueryEscape(desc.RoleName),
+			url.QueryEscape(accountID),
+		)
+	}
+
+	var attached []string
+	var marker *string
+	for {
+		out, err := client.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{RoleName: &roleName, Marker: marker})
+		if err != nil {
+			return nil, fmt.Errorf("listing attached policies for role %q: %w", roleName, err)
+		}
+		for _, p := range out.AttachedPolicies {
+			if p.PolicyName != nil {
+				attached = append(attached, *p.PolicyName)
+			}
+		}
+		if !out.IsTruncated {
+			break
+		}
+		marker = out.Marker
+	}
+	sort.Strings(attached)
+	desc.AttachedPolicyNames = attached
+
+	var inlineNames []string
+	marker = nil
+	for {
+		out, err := client.ListRolePolicies(ctx, &iam.ListRolePoliciesInput{RoleName: &roleName, Marker: marker})
+		if err != nil {
+			return nil, fmt.Errorf("listing inline policies for role %q: %w", roleName, err)
+		}
+		inlineNames = append(inlineNames, out.PolicyNames...)
+		if !out.IsTruncated {
+			break
+		}
+		marker = out.Marker
+	}
+	sort.Strings(inlineNames)
+
+	for _, policyName := range inlineNames {
+		out, err := client.GetRolePolicy(ctx, &iam.GetRolePolicyInput{RoleName: &roleName, PolicyName: &policyName})
+		if err != nil {
+			return nil, fmt.Errorf("getting inline policy %q for role %q: %w", policyName, roleName, err)
+		}
+		if out.PolicyDocument == nil {
+			continue
+		}
+		docStr, err := url.QueryUnescape(*out.PolicyDocument)
+		if err != nil {
+			return nil, fmt.Errorf("decoding inline policy %q for role %q: %w", policyName, roleName, err)
+		}
+		var doc policy.PolicyDocument
+		if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+			return nil, fmt.Errorf("parsing inline policy %q for role %q: %w", policyName, roleName, err)
+		}
+		desc.InlinePolicies[policyName] = doc
+	}
+
+	return desc, nil
+}
+
+// DescribeManagedPolicy returns managed policy metadata and default version document.
+func DescribeManagedPolicy(ctx context.Context, client IAMClient, policyARN string) (*PolicyDescription, error) {
+	policyOut, err := client.GetPolicy(ctx, &iam.GetPolicyInput{PolicyArn: &policyARN})
+	if err != nil {
+		return nil, fmt.Errorf("getting policy %q: %w", policyARN, err)
+	}
+	if policyOut.Policy == nil || policyOut.Policy.DefaultVersionId == nil || policyOut.Policy.PolicyName == nil || policyOut.Policy.Arn == nil {
+		return nil, fmt.Errorf("policy %q response missing required fields", policyARN)
+	}
+
+	versionOut, err := client.GetPolicyVersion(ctx, &iam.GetPolicyVersionInput{PolicyArn: &policyARN, VersionId: policyOut.Policy.DefaultVersionId})
+	if err != nil {
+		return nil, fmt.Errorf("getting policy version for %q: %w", policyARN, err)
+	}
+	if versionOut.PolicyVersion == nil || versionOut.PolicyVersion.Document == nil {
+		return nil, fmt.Errorf("policy version for %q missing document", policyARN)
+	}
+
+	docStr, err := url.QueryUnescape(*versionOut.PolicyVersion.Document)
+	if err != nil {
+		return nil, fmt.Errorf("decoding policy document for %q: %w", policyARN, err)
+	}
+	var doc policy.PolicyDocument
+	if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+		return nil, fmt.Errorf("parsing policy document for %q: %w", policyARN, err)
+	}
+
+	desc := &PolicyDescription{
+		Name:             *policyOut.Policy.PolicyName,
+		ARN:              *policyOut.Policy.Arn,
+		DefaultVersionID: *policyOut.Policy.DefaultVersionId,
+		Document:         doc,
+		IsAWSManaged:     strings.Contains(*policyOut.Policy.Arn, ":iam::aws:policy/"),
+	}
+	if policyOut.Policy.Description != nil {
+		desc.Description = *policyOut.Policy.Description
+	}
+	if policyOut.Policy.Path != nil {
+		desc.Path = *policyOut.Policy.Path
+	}
+	if policyOut.Policy.CreateDate != nil {
+		v := *policyOut.Policy.CreateDate
+		desc.CreateDate = &v
+	}
+	if policyOut.Policy.UpdateDate != nil {
+		v := *policyOut.Policy.UpdateDate
+		desc.UpdateDate = &v
+	}
+
+	return desc, nil
+}
+
+func extractAccountIDFromRoleARN(roleARN string) string {
+	parts := strings.Split(roleARN, ":")
+	if len(parts) < 6 {
+		return ""
+	}
+	return parts[4]
 }
 
 // SearchRolesBySubstring lists account roles whose names contain query, case-insensitively.

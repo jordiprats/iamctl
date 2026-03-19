@@ -14,15 +14,21 @@ import (
 
 type mockIAMClient struct {
 	getRoleF                  func(context.Context, *iam.GetRoleInput, ...func(*iam.Options)) (*iam.GetRoleOutput, error)
+	getRolePolicyF            func(context.Context, *iam.GetRolePolicyInput, ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error)
 	getPolicyF                func(context.Context, *iam.GetPolicyInput, ...func(*iam.Options)) (*iam.GetPolicyOutput, error)
 	getPolicyVersionF         func(context.Context, *iam.GetPolicyVersionInput, ...func(*iam.Options)) (*iam.GetPolicyVersionOutput, error)
 	listAttachedRolePoliciesF func(context.Context, *iam.ListAttachedRolePoliciesInput, ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+	listRolePoliciesF         func(context.Context, *iam.ListRolePoliciesInput, ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error)
 	listRolesF                func(context.Context, *iam.ListRolesInput, ...func(*iam.Options)) (*iam.ListRolesOutput, error)
 	listPoliciesF             func(context.Context, *iam.ListPoliciesInput, ...func(*iam.Options)) (*iam.ListPoliciesOutput, error)
 }
 
 func (m *mockIAMClient) GetRole(ctx context.Context, p *iam.GetRoleInput, o ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
 	return m.getRoleF(ctx, p, o...)
+}
+
+func (m *mockIAMClient) GetRolePolicy(ctx context.Context, p *iam.GetRolePolicyInput, o ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
+	return m.getRolePolicyF(ctx, p, o...)
 }
 
 func (m *mockIAMClient) GetPolicy(ctx context.Context, p *iam.GetPolicyInput, o ...func(*iam.Options)) (*iam.GetPolicyOutput, error) {
@@ -35,6 +41,10 @@ func (m *mockIAMClient) GetPolicyVersion(ctx context.Context, p *iam.GetPolicyVe
 
 func (m *mockIAMClient) ListAttachedRolePolicies(ctx context.Context, p *iam.ListAttachedRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {
 	return m.listAttachedRolePoliciesF(ctx, p, o...)
+}
+
+func (m *mockIAMClient) ListRolePolicies(ctx context.Context, p *iam.ListRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+	return m.listRolePoliciesF(ctx, p, o...)
 }
 
 func (m *mockIAMClient) ListRoles(ctx context.Context, p *iam.ListRolesInput, o ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
@@ -417,5 +427,88 @@ func TestSearchManagedPoliciesBySubstring_DescriptionFilters(t *testing.T) {
 	}
 	if policies[0].Name != "ReadPolicyA" {
 		t.Fatalf("unexpected policy: %+v", policies[0])
+	}
+}
+
+func TestDescribeRole(t *testing.T) {
+	createdAt := time.Now().Add(-24 * time.Hour)
+	usedAt := time.Now().Add(-10 * time.Minute)
+	inlineDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`
+
+	mock := &mockIAMClient{
+		getRoleF: func(ctx context.Context, p *iam.GetRoleInput, o ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
+			return &iam.GetRoleOutput{Role: &iamtypes.Role{
+				RoleName:           aws.String("my-role"),
+				Arn:                aws.String("arn:aws:iam::123456789012:role/my-role"),
+				CreateDate:         &createdAt,
+				MaxSessionDuration: aws.Int32(3600),
+				RoleLastUsed:       &iamtypes.RoleLastUsed{LastUsedDate: &usedAt},
+			}}, nil
+		},
+		listAttachedRolePoliciesF: func(ctx context.Context, p *iam.ListAttachedRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {
+			return &iam.ListAttachedRolePoliciesOutput{AttachedPolicies: []iamtypes.AttachedPolicy{
+				{PolicyName: aws.String("ManagedOne"), PolicyArn: aws.String("arn:aws:iam::123456789012:policy/ManagedOne")},
+			}}, nil
+		},
+		listRolePoliciesF: func(ctx context.Context, p *iam.ListRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+			return &iam.ListRolePoliciesOutput{PolicyNames: []string{"InlineOne"}}, nil
+		},
+		getRolePolicyF: func(ctx context.Context, p *iam.GetRolePolicyInput, o ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
+			return &iam.GetRolePolicyOutput{PolicyDocument: aws.String(urlEncode(inlineDoc))}, nil
+		},
+	}
+
+	role, err := DescribeRole(context.Background(), mock, "my-role")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if role.RoleName != "my-role" {
+		t.Fatalf("unexpected role name: %s", role.RoleName)
+	}
+	if role.SwitchRoleURL == "" {
+		t.Fatalf("expected switch role URL")
+	}
+	if len(role.AttachedPolicyNames) != 1 || role.AttachedPolicyNames[0] != "ManagedOne" {
+		t.Fatalf("unexpected attached policies: %+v", role.AttachedPolicyNames)
+	}
+	if _, ok := role.InlinePolicies["InlineOne"]; !ok {
+		t.Fatalf("expected inline policy InlineOne")
+	}
+}
+
+func TestDescribeManagedPolicy(t *testing.T) {
+	createdAt := time.Now().Add(-48 * time.Hour)
+	updatedAt := time.Now().Add(-1 * time.Hour)
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:DescribeInstances","Resource":"*"}]}`
+
+	mock := &mockIAMClient{
+		getPolicyF: func(ctx context.Context, p *iam.GetPolicyInput, o ...func(*iam.Options)) (*iam.GetPolicyOutput, error) {
+			return &iam.GetPolicyOutput{Policy: &iamtypes.Policy{
+				PolicyName:       aws.String("ReadOnly"),
+				Arn:              aws.String("arn:aws:iam::aws:policy/ReadOnlyAccess"),
+				Description:      aws.String("Read only policy"),
+				Path:             aws.String("/"),
+				DefaultVersionId: aws.String("v1"),
+				CreateDate:       &createdAt,
+				UpdateDate:       &updatedAt,
+			}}, nil
+		},
+		getPolicyVersionF: func(ctx context.Context, p *iam.GetPolicyVersionInput, o ...func(*iam.Options)) (*iam.GetPolicyVersionOutput, error) {
+			return &iam.GetPolicyVersionOutput{PolicyVersion: &iamtypes.PolicyVersion{Document: aws.String(urlEncode(doc))}}, nil
+		},
+	}
+
+	policyDesc, err := DescribeManagedPolicy(context.Background(), mock, "arn:aws:iam::aws:policy/ReadOnlyAccess")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !policyDesc.IsAWSManaged {
+		t.Fatalf("expected AWS managed policy")
+	}
+	if policyDesc.Name != "ReadOnly" {
+		t.Fatalf("unexpected policy name: %s", policyDesc.Name)
+	}
+	if len(policyDesc.Document.Statement) != 1 {
+		t.Fatalf("unexpected parsed policy document")
 	}
 }

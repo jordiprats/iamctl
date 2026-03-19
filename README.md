@@ -9,12 +9,14 @@ This tool allows you to:
 1. **Single Action Check** (`check-action`): Verify if one or more AWS actions are allowed by your permission boundary.
 2. **Policy Validation** (`check-policy`): Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked.
 3. **Role Check** (`check-role`): Fetch all managed policies attached to an **IAM role** and evaluate them against the permission boundary.
-4. **Role List** (`role-list`): List IAM roles whose name contains a given string, with optional last-activity filtering.
-5. **Policy List** (`policy-list`): List IAM managed policies whose name contains a given string, with optional description filters.
-6. **CloudFormation Check** (`check-cf`): Analyze IAM roles and policies from a **CloudFormation template** against the permission boundary.
-7. **Diff** (`diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
-8. **Policy from Role Usage** (`policy-from-role-usage`): Generate a least-privilege policy based on a role's actual usage (service last accessed data).
-9. **Shrink Role Policies** (`shrink-role-policies`): Take a role's existing attached policies and remove unused actions based on actual usage.
+4. **Describe Role** (`describe-role`): Show role summary details, switch role link, managed policies, and inline policy JSON.
+5. **Describe Policy** (`describe-policy`): Show managed policy metadata and its JSON document.
+6. **Role List** (`role-list`): List IAM roles whose name contains a given string, with optional last-activity filtering.
+7. **Policy List** (`policy-list`): List IAM managed policies whose name contains a given string, with optional description filters.
+8. **CloudFormation Check** (`check-cf`): Analyze IAM roles and policies from a **CloudFormation template** against the permission boundary.
+9. **Diff** (`diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
+10. **Policy from Role Usage** (`policy-from-role-usage`): Generate a least-privilege policy based on a role's actual usage (service last accessed data).
+11. **Shrink Role Policies** (`shrink-role-policies`): Take a role's existing attached policies and remove unused actions based on actual usage.
 
 ## Installation
 
@@ -146,6 +148,57 @@ iamctl check-role --profile staging --output json my-role
 **Exit Codes:**
 - `0`: All actions are allowed
 - `1`: One or more actions are blocked
+
+---
+
+#### `describe-role` — Describe an IAM Role
+
+Show role summary details similar to the AWS console, plus managed policy names and inline policy JSON documents.
+
+```bash
+iamctl describe-role [options] <role-name>
+```
+
+**Options:**
+- `--profile <name>`: AWS profile to use
+- `--output <format>`: Output format — `wide` or `json` (default: `wide`)
+
+**Examples:**
+
+```bash
+# Describe a role
+iamctl describe-role my-role
+
+# JSON output
+iamctl describe-role --output json my-role
+
+# Use a specific profile
+iamctl describe-role --profile staging my-role
+```
+
+---
+
+#### `describe-policy` — Describe a Managed Policy
+
+Show managed policy metadata and the default version JSON policy document.
+
+```bash
+iamctl describe-policy [options] <policy-arn>
+```
+
+**Options:**
+- `--profile <name>`: AWS profile to use
+- `--json-policy`: Print only the policy JSON document
+
+**Examples:**
+
+```bash
+# Describe AWS managed policy
+iamctl describe-policy arn:aws:iam::aws:policy/ReadOnlyAccess
+
+# Print only policy JSON
+iamctl describe-policy --json-policy arn:aws:iam::123456789012:policy/MyPolicy
+```
 
 ---
 
