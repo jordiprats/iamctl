@@ -389,7 +389,7 @@ iamctl policy-from-role-usage -q my-role > minimal-policy.json
 
 Fetch all managed policies attached to a role and remove unused actions based on service last accessed data. The output is a single consolidated policy preserving the original structure (Sids, Resources, Conditions) with only unused Allow actions removed.
 
-Deny statements, NotAction statements, and Conditions are preserved as-is.
+Deny statements, NotAction statements, and Conditions are preserved as-is by default.
 
 ```bash
 iamctl shrink-role-policies [options] <role-name>
@@ -398,6 +398,7 @@ iamctl shrink-role-policies [options] <role-name>
 **Options:**
 - `--profile <name>`: AWS profile to use
 - `-q, --quiet`: Suppress informational output, print only the policy JSON (useful for scripts)
+- `--ignore-deny`: Omit Deny statements from the output policy
 
 **Examples:**
 
@@ -410,6 +411,9 @@ iamctl shrink-role-policies --profile staging my-role
 
 # Quiet mode for piping into a file
 iamctl shrink-role-policies -q my-role > shrunk-policy.json
+
+# Omit Deny statements from the output
+iamctl shrink-role-policies --ignore-deny my-role
 ```
 
 ## Permission Boundary Format

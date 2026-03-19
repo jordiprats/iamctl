@@ -8,7 +8,8 @@ Fetches all managed policies attached to the given role, then uses service last 
 data (at ACTION_LEVEL granularity) to identify which actions are actually being used.
 
 Outputs a single consolidated policy containing only the actions the role has really used.
-Deny statements, NotAction statements, Conditions, Resources, and Sids are preserved as-is.
+Deny statements, NotAction statements, Conditions, Resources, and Sids are preserved as-is by default.
+Use --ignore-deny to omit Deny statements from the output.
 
 ```
 iamctl shrink-role-policies <role-name> [flags]
@@ -25,6 +26,7 @@ iamctl shrink-role-policies <role-name> [flags]
 
 ```
   -h, --help             help for shrink-role-policies
+      --ignore-deny      Omit Deny statements from the output policy
       --profile string   AWS profile to use
   -q, --quiet            Suppress informational output, print only the policy JSON
 ```

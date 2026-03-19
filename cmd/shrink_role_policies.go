@@ -27,13 +27,15 @@ func newShrinkRolePoliciesCmd() *cobra.Command {
 data (at ACTION_LEVEL granularity) to identify which actions are actually being used.
 
 Outputs a single consolidated policy containing only the actions the role has really used.
-Deny statements, NotAction statements, Conditions, Resources, and Sids are preserved as-is.`,
+Deny statements, NotAction statements, Conditions, Resources, and Sids are preserved as-is by default.
+Use --ignore-deny to omit Deny statements from the output.`,
 		Args: cobra.ExactArgs(1),
 		Example: `  iamctl shrink-role-policies my-role
   iamctl shrink-role-policies --profile staging my-role`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profile, _ := cmd.Flags().GetString("profile")
 			quiet, _ := cmd.Flags().GetBool("quiet")
+			ignoreDeny, _ := cmd.Flags().GetBool("ignore-deny")
 			roleName := args[0]
 
 			ctx := cmd.Context()
@@ -88,7 +90,7 @@ Deny statements, NotAction statements, Conditions, Resources, and Sids are prese
 			}
 
 			// Shrink the policy
-			shrunk, removed := shrinkDocument(doc, accessedActions)
+			shrunk, removed := shrinkDocument(doc, accessedActions, ignoreDeny)
 
 			if !quiet {
 				if len(removed) > 0 {
@@ -110,6 +112,7 @@ Deny statements, NotAction statements, Conditions, Resources, and Sids are prese
 
 	cmd.Flags().String("profile", "", "AWS profile to use")
 	cmd.Flags().BoolP("quiet", "q", false, "Suppress informational output, print only the policy JSON")
+	cmd.Flags().Bool("ignore-deny", false, "Omit Deny statements from the output policy")
 
 	return cmd
 }
@@ -185,15 +188,19 @@ func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (
 }
 
 // shrinkDocument removes unused Allow actions from a policy document.
-// Deny statements, NotAction statements, and non-Action statements are kept as-is.
+// Deny statements are kept unless ignoreDeny is true.
+// NotAction statements and non-Action statements are kept as-is.
 // Returns the shrunk document and a list of removed actions.
-func shrinkDocument(doc policy.PolicyDocument, accessed map[string]bool) (policy.PolicyDocument, []string) {
+func shrinkDocument(doc policy.PolicyDocument, accessed map[string]bool, ignoreDeny bool) (policy.PolicyDocument, []string) {
 	var kept []policy.Statement
 	var removed []string
 
 	for _, stmt := range doc.Statement {
-		// Keep Deny statements untouched
-		if stmt.Effect == "Deny" {
+		// Keep Deny statements unless explicitly ignored
+		if strings.EqualFold(stmt.Effect, "Deny") {
+			if ignoreDeny {
+				continue
+			}
 			kept = append(kept, stmt)
 			continue
 		}

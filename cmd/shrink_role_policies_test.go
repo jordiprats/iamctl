@@ -22,7 +22,7 @@ func TestShrinkDocument_RemovesUnusedActions(t *testing.T) {
 		"s3:putobject": true,
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed)
+	shrunk, removed := shrinkDocument(doc, accessed, false)
 
 	if len(removed) != 1 {
 		t.Fatalf("expected 1 removed action, got %d: %v", len(removed), removed)
@@ -48,7 +48,7 @@ func TestShrinkDocument_PreservesDenyStatements(t *testing.T) {
 	}
 	accessed := map[string]bool{}
 
-	shrunk, removed := shrinkDocument(doc, accessed)
+	shrunk, removed := shrinkDocument(doc, accessed, false)
 
 	if len(removed) != 0 {
 		t.Fatalf("Deny statements should not be pruned, got %d removed", len(removed))
@@ -58,6 +58,29 @@ func TestShrinkDocument_PreservesDenyStatements(t *testing.T) {
 	}
 	if shrunk.Statement[0].Effect != "Deny" {
 		t.Errorf("expected Deny, got %s", shrunk.Statement[0].Effect)
+	}
+}
+
+func TestShrinkDocument_IgnoresDenyStatementsWhenFlagSet(t *testing.T) {
+	doc := policy.PolicyDocument{
+		Version: "2012-10-17",
+		Statement: []policy.Statement{
+			{
+				Effect:   "Deny",
+				Action:   []interface{}{"iam:*"},
+				Resource: "*",
+			},
+		},
+	}
+	accessed := map[string]bool{}
+
+	shrunk, removed := shrinkDocument(doc, accessed, true)
+
+	if len(removed) != 0 {
+		t.Fatalf("Deny statements should be ignored without adding removed actions, got %d removed", len(removed))
+	}
+	if len(shrunk.Statement) != 0 {
+		t.Fatalf("expected Deny statement to be omitted, got %d statements", len(shrunk.Statement))
 	}
 }
 
@@ -74,7 +97,7 @@ func TestShrinkDocument_PreservesNotActionStatements(t *testing.T) {
 	}
 	accessed := map[string]bool{}
 
-	shrunk, removed := shrinkDocument(doc, accessed)
+	shrunk, removed := shrinkDocument(doc, accessed, false)
 
 	if len(removed) != 0 {
 		t.Fatalf("NotAction statements should not be pruned, got %d removed", len(removed))
@@ -97,7 +120,7 @@ func TestShrinkDocument_RemovesEntireStatementIfAllUnused(t *testing.T) {
 	}
 	accessed := map[string]bool{}
 
-	shrunk, removed := shrinkDocument(doc, accessed)
+	shrunk, removed := shrinkDocument(doc, accessed, false)
 
 	if len(removed) != 1 {
 		t.Fatalf("expected 1 removed action, got %d", len(removed))
@@ -122,7 +145,7 @@ func TestShrinkDocument_SingleSurvivingActionBecomesString(t *testing.T) {
 		"s3:getobject": true,
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed)
+	shrunk, removed := shrinkDocument(doc, accessed, false)
 
 	if len(removed) != 1 {
 		t.Fatalf("expected 1 removed, got %d", len(removed))
@@ -148,7 +171,7 @@ func TestShrinkDocument_PreservesStatementsWithNilAction(t *testing.T) {
 	}
 	accessed := map[string]bool{}
 
-	shrunk, _ := shrinkDocument(doc, accessed)
+	shrunk, _ := shrinkDocument(doc, accessed, false)
 
 	if len(shrunk.Statement) != 1 {
 		t.Fatalf("expected 1 statement preserved (nil Action), got %d", len(shrunk.Statement))
@@ -172,7 +195,7 @@ func TestShrinkDocument_PreservesSidAndCondition(t *testing.T) {
 		"s3:getobject": true,
 	}
 
-	shrunk, _ := shrinkDocument(doc, accessed)
+	shrunk, _ := shrinkDocument(doc, accessed, false)
 
 	if len(shrunk.Statement) != 1 {
 		t.Fatalf("expected 1 statement, got %d", len(shrunk.Statement))
@@ -202,7 +225,7 @@ func TestShrinkDocument_MixedStatements(t *testing.T) {
 		"s3:getobject": true,
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed)
+	shrunk, removed := shrinkDocument(doc, accessed, false)
 
 	if len(removed) != 2 {
 		t.Fatalf("expected 2 removed, got %d: %v", len(removed), removed)
@@ -224,7 +247,7 @@ func TestShrinkDocument_StringAction(t *testing.T) {
 		"s3:getobject": true,
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed)
+	shrunk, removed := shrinkDocument(doc, accessed, false)
 
 	if len(removed) != 0 {
 		t.Fatalf("expected 0 removed, got %d", len(removed))
