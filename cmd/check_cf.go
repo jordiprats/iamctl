@@ -37,11 +37,11 @@ Intrinsic functions (Fn::Join, Ref, Fn::Sub) in ARN values are resolved
 automatically using STS GetCallerIdentity for the AWS account ID.
 Inline policies from the Policies property are parsed directly.`,
 		Args: cobra.ExactArgs(1),
-		Example: `  iam-pb-check check-cf template.yaml
-  iam-pb-check check-cf --pb boundary.json template.yaml
-  iam-pb-check check-cf --resource LambdaRole template.yaml
-  iam-pb-check check-cf --profile staging --output json template.yaml
-  iam-pb-check check-cf --pb boundary.json --resource MyPolicy template.yaml`,
+		Example: `  iamctl check-cf template.yaml
+  iamctl check-cf --pb boundary.json template.yaml
+  iamctl check-cf --resource LambdaRole template.yaml
+  iamctl check-cf --profile staging --output json template.yaml
+  iamctl check-cf --pb boundary.json --resource MyPolicy template.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, _ := cmd.Flags().GetString("output")
 			profile, _ := cmd.Flags().GetString("profile")

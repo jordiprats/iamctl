@@ -17,9 +17,9 @@ func newCheckRoleCmd() *cobra.Command {
 		Use:   "check-role <role-name>",
 		Short: "Fetch managed policies for an IAM role and check which actions are blocked by the permission boundary",
 		Args:  cobra.ExactArgs(1),
-		Example: `  iam-pb-check check-role my-role
-  iam-pb-check check-role --pb boundary.json --output json my-role
-  iam-pb-check check-role --profile staging my-role`,
+		Example: `  iamctl check-role my-role
+  iamctl check-role --pb boundary.json --output json my-role
+  iamctl check-role --profile staging my-role`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, _ := cmd.Flags().GetString("output")
 			profile, _ := cmd.Flags().GetString("profile")

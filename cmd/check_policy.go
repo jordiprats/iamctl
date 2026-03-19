@@ -17,13 +17,13 @@ func newCheckPolicyCmd() *cobra.Command {
 		Use:   "check-policy [policy-file]",
 		Short: "Check which actions in a policy are allowed or blocked by the permission boundary",
 		Args:  cobra.MaximumNArgs(1),
-		Example: `  iam-pb-check check-policy --pb boundary.json policy.json
-  iam-pb-check check-policy --pb boundary.json --policy-file extra.json policy.json
-  iam-pb-check check-policy --pb boundary.json --policy-file a.json --policy-file b.json
-  iam-pb-check check-policy --pb boundary.json --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
-  iam-pb-check check-policy --pb boundary.json --output json policy.json
-  iam-pb-check check-policy --pb boundary.json --output table policy.json
-  cat policy.json | iam-pb-check check-policy --pb boundary.json -`,
+		Example: `  iamctl check-policy --pb boundary.json policy.json
+  iamctl check-policy --pb boundary.json --policy-file extra.json policy.json
+  iamctl check-policy --pb boundary.json --policy-file a.json --policy-file b.json
+  iamctl check-policy --pb boundary.json --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
+  iamctl check-policy --pb boundary.json --output json policy.json
+  iamctl check-policy --pb boundary.json --output table policy.json
+  cat policy.json | iamctl check-policy --pb boundary.json -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			format, _ := cmd.Flags().GetString("output")

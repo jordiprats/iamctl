@@ -2,4 +2,5 @@
 !testdata/*.json
 pb-checker
 iam-pb-check
+iamctl
 ec2-pb-check

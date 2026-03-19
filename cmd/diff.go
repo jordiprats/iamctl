@@ -17,8 +17,8 @@ func newDiffCmd() *cobra.Command {
 		Long: `Loads two permission boundaries (--pb and --pb-new) and reports which Allow actions
 in the given policy would gain or lose access when switching from the old to the new boundary.`,
 		Args: cobra.ExactArgs(1),
-		Example: `  iam-pb-check diff --pb old-boundary.json --pb-new new-boundary.json policy.json
-  iam-pb-check diff --pb old-boundary.json --pb-new new-boundary.json --output json policy.json`,
+		Example: `  iamctl diff --pb old-boundary.json --pb-new new-boundary.json policy.json
+  iamctl diff --pb old-boundary.json --pb-new new-boundary.json --output json policy.json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			pbNewFile, _ := cmd.Flags().GetString("pb-new")

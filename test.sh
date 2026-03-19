@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-BINARY="./dist/iam-pb-check"
+BINARY="./dist/iamctl"
 TESTDATA="./testdata"
 TMPDIR_TEST=$(mktemp -d)
 
@@ -17,12 +17,12 @@ fail() { echo "❌ $1"; FAILED=$((FAILED + 1)); }
 # Build (if binary doesn't already exist)
 # -----------------------------------------------------------------------
 if [ ! -x "$BINARY" ]; then
-  echo "Building iam-pb-check..."
-  go build -o dist/iam-pb-check main.go
+  echo "Building iamctl..."
+  go build -o dist/iamctl main.go
 fi
 
 VER=$($BINARY -v | head -n1)
-if [[ "$VER" == *"iam-pb-check version"* ]]; then
+if [[ "$VER" == *"iamctl version"* ]]; then
   pass "Version output looks correct: $VER"
 else
   fail "Version output looks wrong: $VER"
@@ -399,7 +399,7 @@ echo "=== --version flag ==="
   && pass "--version flag works" \
   || fail "--version flag failed"
 
-"$BINARY" --version | grep -qE "iam-pb-check|version" \
+"$BINARY" --version | grep -qE "iamctl|version" \
   && pass "Version output looks correct" \
   || fail "Version output missing expected text"
 

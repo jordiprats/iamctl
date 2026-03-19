@@ -15,10 +15,10 @@ func newCheckActionCmd() *cobra.Command {
 		Use:   "check-action <action> [action...]",
 		Short: "Check if one or more actions are allowed by the permission boundary",
 		Args:  cobra.MinimumNArgs(1),
-		Example: `  iam-pb-check check-action ec2:RunInstances
-  iam-pb-check check-action s3:PutObject s3:GetObject ec2:DescribeInstances
-  iam-pb-check check-action --pb boundary.json s3:PutObject
-  aws iam get-policy-version ... | iam-pb-check check-action --pb - ec2:RunInstances`,
+		Example: `  iamctl check-action ec2:RunInstances
+  iamctl check-action s3:PutObject s3:GetObject ec2:DescribeInstances
+  iamctl check-action --pb boundary.json s3:PutObject
+  aws iam get-policy-version ... | iamctl check-action --pb - ec2:RunInstances`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 

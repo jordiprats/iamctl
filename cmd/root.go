@@ -5,9 +5,9 @@ import "github.com/spf13/cobra"
 // NewRootCmd creates the root cobra command.
 func NewRootCmd(version string) *cobra.Command {
 	root := &cobra.Command{
-		Use:   "iam-pb-check",
-		Short: "AWS IAM Permission Boundary Checker",
-		Long:  "Validate AWS IAM actions and policies against a permission boundary definition.",
+		Use:   "iamctl",
+		Short: "AWS IAM Swiss Army Knife",
+		Long:  "Validate AWS IAM actions and policies against a permission boundary definition, generate least-privilege policies, and more.",
 	}
 
 	root.Version = version
@@ -18,6 +18,8 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newCheckRoleCmd())
 	root.AddCommand(newCheckCfCmd())
 	root.AddCommand(newDiffCmd())
+	root.AddCommand(newPolicyFromRoleUsageCmd())
+	root.AddCommand(newShrinkRolePoliciesCmd())
 
 	return root
 }
