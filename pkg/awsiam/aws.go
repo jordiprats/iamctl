@@ -33,14 +33,14 @@ type IAMClient interface {
 
 // RoleDescription is a detailed role view for describe-role style output.
 type RoleDescription struct {
-	RoleName            string
-	ARN                 string
-	CreateDate          time.Time
-	SwitchRoleURL       string
-	LastUsedAt          *time.Time
-	MaxSessionDuration  int32
-	AttachedPolicyNames []string
-	InlinePolicies      map[string]policy.PolicyDocument
+	RoleName           string
+	ARN                string
+	CreateDate         time.Time
+	SwitchRoleURL      string
+	LastUsedAt         *time.Time
+	MaxSessionDuration int32
+	AttachedPolicies   []AttachedPolicyRef
+	InlinePolicies     map[string]policy.PolicyDocument
 }
 
 // PolicyDescription is a detailed managed policy view for describe-policy style output.
@@ -54,6 +54,12 @@ type PolicyDescription struct {
 	UpdateDate       *time.Time
 	IsAWSManaged     bool
 	Document         policy.PolicyDocument
+}
+
+// AttachedPolicyRef is a managed policy attached to a role.
+type AttachedPolicyRef struct {
+	Name string `json:"name"`
+	ARN  string `json:"arn"`
 }
 
 // RoleSummary represents a minimal role identity.
@@ -286,7 +292,7 @@ func DescribeRole(ctx context.Context, client IAMClient, roleName string) (*Role
 		)
 	}
 
-	var attached []string
+	var attached []AttachedPolicyRef
 	var marker *string
 	for {
 		out, err := client.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{RoleName: &roleName, Marker: marker})
@@ -294,8 +300,8 @@ func DescribeRole(ctx context.Context, client IAMClient, roleName string) (*Role
 			return nil, fmt.Errorf("listing attached policies for role %q: %w", roleName, err)
 		}
 		for _, p := range out.AttachedPolicies {
-			if p.PolicyName != nil {
-				attached = append(attached, *p.PolicyName)
+			if p.PolicyName != nil && p.PolicyArn != nil {
+				attached = append(attached, AttachedPolicyRef{Name: *p.PolicyName, ARN: *p.PolicyArn})
 			}
 		}
 		if !out.IsTruncated {
@@ -303,8 +309,10 @@ func DescribeRole(ctx context.Context, client IAMClient, roleName string) (*Role
 		}
 		marker = out.Marker
 	}
-	sort.Strings(attached)
-	desc.AttachedPolicyNames = attached
+	sort.Slice(attached, func(i, j int) bool {
+		return attached[i].Name < attached[j].Name
+	})
+	desc.AttachedPolicies = attached
 
 	var inlineNames []string
 	marker = nil

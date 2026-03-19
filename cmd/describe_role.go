@@ -58,11 +58,11 @@ func newDescribeRoleCmd() *cobra.Command {
 			}
 
 			fmt.Println("Managed Policies:")
-			if len(desc.AttachedPolicyNames) == 0 {
+			if len(desc.AttachedPolicies) == 0 {
 				fmt.Println("  (none)")
 			} else {
-				for _, name := range desc.AttachedPolicyNames {
-					fmt.Printf("  - %s\n", name)
+				for _, p := range desc.AttachedPolicies {
+					fmt.Printf("  - %s\n", p.ARN)
 				}
 			}
 

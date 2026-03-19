@@ -17,6 +17,7 @@ func newRoleListCmd() *cobra.Command {
 		Short:   "List IAM roles whose names contain a string",
 		Args:    cobra.ExactArgs(1),
 		Example: `  iamctl role-list app
+  iamctl role-list -1 app
   iamctl role-list --active-within-days 90 app
   iamctl role-list --output json read
   iamctl role-list --profile staging ops`,
@@ -25,6 +26,7 @@ func newRoleListCmd() *cobra.Command {
 			format, _ := cmd.Flags().GetString("output")
 			profile, _ := cmd.Flags().GetString("profile")
 			activeWithinDays, _ := cmd.Flags().GetInt("active-within-days")
+			onePerLine, _ := cmd.Flags().GetBool("one-per-line")
 
 			if activeWithinDays < 0 {
 				return fmt.Errorf("--active-within-days must be >= 0")
@@ -48,6 +50,9 @@ func newRoleListCmd() *cobra.Command {
 
 			switch format {
 			case "json":
+				if onePerLine {
+					return fmt.Errorf("-1/--one-per-line cannot be used with --output json")
+				}
 				result := map[string]interface{}{
 					"query":              query,
 					"active_within_days": activeWithinDays,
@@ -57,11 +62,16 @@ func newRoleListCmd() *cobra.Command {
 				out, _ := json.MarshalIndent(result, "", "  ")
 				fmt.Println(string(out))
 			default:
+				if onePerLine {
+					for _, role := range roles {
+						fmt.Println(role.Name)
+					}
+					return nil
+				}
 				if len(roles) == 0 {
 					fmt.Printf("No IAM roles found matching the requested filters\n")
 					return nil
 				}
-				fmt.Printf("Found %d IAM role(s) containing %q:\n", len(roles), query)
 				for _, role := range roles {
 					lastUsed := "(never/unknown)"
 					if role.LastUsedAt != nil {
@@ -78,6 +88,7 @@ func newRoleListCmd() *cobra.Command {
 	cmd.Flags().String("output", "list", "Output format: list or json")
 	cmd.Flags().String("profile", "", "AWS profile to use (defaults to current AWS_PROFILE / default)")
 	cmd.Flags().Int("active-within-days", 0, "Filter matches to roles active within the last N days (0 disables filter)")
+	cmd.Flags().BoolP("one-per-line", "1", false, "Print only matching role names, one per line")
 
 	return cmd
 }

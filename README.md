@@ -214,12 +214,16 @@ iamctl role-list [options] <query>
 - `--output <format>`: Output format — `list` or `json` (default: `list`)
 - `--profile <name>`: AWS profile to use
 - `--active-within-days <n>`: Filter roles active within the last N days
+- `-1, --one-per-line`: Print only matching role names, one per line
 
 **Examples:**
 
 ```bash
 # List roles containing "app"
 iamctl role-list app
+
+# Print matching role names only (one per line)
+iamctl role-list -1 app
 
 # Include only roles active in the last 90 days
 iamctl role-list --active-within-days 90 app

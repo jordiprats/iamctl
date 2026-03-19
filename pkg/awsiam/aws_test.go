@@ -468,8 +468,8 @@ func TestDescribeRole(t *testing.T) {
 	if role.SwitchRoleURL == "" {
 		t.Fatalf("expected switch role URL")
 	}
-	if len(role.AttachedPolicyNames) != 1 || role.AttachedPolicyNames[0] != "ManagedOne" {
-		t.Fatalf("unexpected attached policies: %+v", role.AttachedPolicyNames)
+	if len(role.AttachedPolicies) != 1 || role.AttachedPolicies[0].Name != "ManagedOne" || role.AttachedPolicies[0].ARN != "arn:aws:iam::123456789012:policy/ManagedOne" {
+		t.Fatalf("unexpected attached policies: %+v", role.AttachedPolicies)
 	}
 	if _, ok := role.InlinePolicies["InlineOne"]; !ok {
 		t.Fatalf("expected inline policy InlineOne")
