@@ -26,6 +26,7 @@ iamctl shrink-role-policies <role-name> [flags]
 ```
   -h, --help             help for shrink-role-policies
       --profile string   AWS profile to use
+  -q, --quiet            Suppress informational output, print only the policy JSON
 ```
 
 ### SEE ALSO

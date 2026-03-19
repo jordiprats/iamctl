@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jordiprats/iamctl/pkg/awsiam"
 	"github.com/jordiprats/iamctl/pkg/boundary"
 	"github.com/jordiprats/iamctl/pkg/policy"
 	"github.com/spf13/cobra"
@@ -26,7 +27,7 @@ func newCheckRoleCmd() *cobra.Command {
 			profile, _ := cmd.Flags().GetString("profile")
 			roleName := args[0]
 
-			iamClient, err := boundary.NewIAMClient(cmd.Context(), profile)
+			iamClient, err := awsiam.NewIAMClient(cmd.Context(), profile)
 			if err != nil {
 				return err
 			}
@@ -40,13 +41,13 @@ func newCheckRoleCmd() *cobra.Command {
 					return fmt.Errorf("loading permission boundary: %w", err)
 				}
 			} else {
-				pb, err = boundary.FetchRoleBoundary(cmd.Context(), iamClient, roleName)
+				pb, err = awsiam.FetchRoleBoundary(cmd.Context(), iamClient, roleName)
 				if err != nil {
 					return err
 				}
 			}
 
-			policies, err := boundary.FetchRolePolicies(cmd.Context(), iamClient, roleName)
+			policies, err := awsiam.FetchRolePolicies(cmd.Context(), iamClient, roleName)
 			if err != nil {
 				return fmt.Errorf("fetching role policies: %w", err)
 			}

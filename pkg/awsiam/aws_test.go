@@ -1,10 +1,11 @@
-package boundary
+package awsiam
 
 import (
 	"context"
 	"fmt"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -16,6 +17,8 @@ type mockIAMClient struct {
 	getPolicyF                func(context.Context, *iam.GetPolicyInput, ...func(*iam.Options)) (*iam.GetPolicyOutput, error)
 	getPolicyVersionF         func(context.Context, *iam.GetPolicyVersionInput, ...func(*iam.Options)) (*iam.GetPolicyVersionOutput, error)
 	listAttachedRolePoliciesF func(context.Context, *iam.ListAttachedRolePoliciesInput, ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+	listRolesF                func(context.Context, *iam.ListRolesInput, ...func(*iam.Options)) (*iam.ListRolesOutput, error)
+	listPoliciesF             func(context.Context, *iam.ListPoliciesInput, ...func(*iam.Options)) (*iam.ListPoliciesOutput, error)
 }
 
 func (m *mockIAMClient) GetRole(ctx context.Context, p *iam.GetRoleInput, o ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
@@ -32,6 +35,14 @@ func (m *mockIAMClient) GetPolicyVersion(ctx context.Context, p *iam.GetPolicyVe
 
 func (m *mockIAMClient) ListAttachedRolePolicies(ctx context.Context, p *iam.ListAttachedRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {
 	return m.listAttachedRolePoliciesF(ctx, p, o...)
+}
+
+func (m *mockIAMClient) ListRoles(ctx context.Context, p *iam.ListRolesInput, o ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
+	return m.listRolesF(ctx, p, o...)
+}
+
+func (m *mockIAMClient) ListPolicies(ctx context.Context, p *iam.ListPoliciesInput, o ...func(*iam.Options)) (*iam.ListPoliciesOutput, error) {
+	return m.listPoliciesF(ctx, p, o...)
 }
 
 func urlEncode(s string) string {
@@ -257,5 +268,154 @@ func TestFetchRoleBoundary_NoBoundary(t *testing.T) {
 	_, err := FetchRoleBoundary(context.Background(), mock, "no-pb-role")
 	if err == nil {
 		t.Fatal("expected error for role without boundary")
+	}
+}
+
+func TestSearchRolesBySubstring(t *testing.T) {
+	listCalls := 0
+	mock := &mockIAMClient{
+		listRolesF: func(ctx context.Context, p *iam.ListRolesInput, o ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
+			listCalls++
+			if listCalls == 1 {
+				return &iam.ListRolesOutput{
+					Roles: []iamtypes.Role{
+						{RoleName: aws.String("AppReadRole"), Arn: aws.String("arn:aws:iam::123456789012:role/AppReadRole")},
+					},
+					IsTruncated: true,
+					Marker:      aws.String("next"),
+				}, nil
+			}
+			return &iam.ListRolesOutput{
+				Roles: []iamtypes.Role{
+					{RoleName: aws.String("db-admin"), Arn: aws.String("arn:aws:iam::123456789012:role/db-admin")},
+					{RoleName: aws.String("OpsReadOnly"), Arn: aws.String("arn:aws:iam::123456789012:role/OpsReadOnly")},
+				},
+			}, nil
+		},
+	}
+
+	roles, err := SearchRolesBySubstring(context.Background(), mock, "read", RoleSearchFilters{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if listCalls != 2 {
+		t.Fatalf("expected 2 list calls, got %d", listCalls)
+	}
+	if len(roles) != 2 {
+		t.Fatalf("expected 2 matching roles, got %d", len(roles))
+	}
+	if roles[0].Name != "AppReadRole" || roles[1].Name != "OpsReadOnly" {
+		t.Fatalf("unexpected roles: %+v", roles)
+	}
+}
+
+func TestSearchRolesBySubstring_LastActivityFilter(t *testing.T) {
+	now := time.Now().UTC()
+	recent := now.Add(-10 * 24 * time.Hour)
+	old := now.Add(-200 * 24 * time.Hour)
+	cutoff := now.Add(-90 * 24 * time.Hour)
+
+	mock := &mockIAMClient{
+		listRolesF: func(ctx context.Context, p *iam.ListRolesInput, o ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
+			return &iam.ListRolesOutput{
+				Roles: []iamtypes.Role{
+					{
+						RoleName:     aws.String("AppFresh"),
+						Arn:          aws.String("arn:aws:iam::123456789012:role/AppFresh"),
+						RoleLastUsed: &iamtypes.RoleLastUsed{LastUsedDate: &recent},
+					},
+					{
+						RoleName:     aws.String("AppOld"),
+						Arn:          aws.String("arn:aws:iam::123456789012:role/AppOld"),
+						RoleLastUsed: &iamtypes.RoleLastUsed{LastUsedDate: &old},
+					},
+					{RoleName: aws.String("AppNever"), Arn: aws.String("arn:aws:iam::123456789012:role/AppNever")},
+				},
+			}, nil
+		},
+	}
+
+	roles, err := SearchRolesBySubstring(context.Background(), mock, "app", RoleSearchFilters{LastActiveAfter: &cutoff})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(roles) != 1 {
+		t.Fatalf("expected 1 matching role after activity filter, got %d", len(roles))
+	}
+	if roles[0].Name != "AppFresh" {
+		t.Fatalf("unexpected role: %+v", roles[0])
+	}
+	if roles[0].LastUsedAt == nil {
+		t.Fatalf("expected last used date in result")
+	}
+}
+
+func TestSearchManagedPoliciesBySubstring(t *testing.T) {
+	mock := &mockIAMClient{
+		listPoliciesF: func(ctx context.Context, p *iam.ListPoliciesInput, o ...func(*iam.Options)) (*iam.ListPoliciesOutput, error) {
+			if p.Scope != iamtypes.PolicyScopeTypeLocal {
+				t.Fatalf("expected Local scope, got %q", p.Scope)
+			}
+			return &iam.ListPoliciesOutput{
+				Policies: []iamtypes.Policy{
+					{PolicyName: aws.String("AppReadPolicy"), Arn: aws.String("arn:aws:iam::123456789012:policy/AppReadPolicy")},
+					{PolicyName: aws.String("OpsPolicy"), Arn: aws.String("arn:aws:iam::123456789012:policy/OpsPolicy")},
+					{PolicyName: aws.String("DBREAD"), Arn: aws.String("arn:aws:iam::123456789012:policy/DBREAD")},
+				},
+			}, nil
+		},
+	}
+
+	policies, err := SearchManagedPoliciesBySubstring(context.Background(), mock, "read", iamtypes.PolicyScopeTypeLocal, PolicySearchFilters{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(policies) != 2 {
+		t.Fatalf("expected 2 matching policies, got %d", len(policies))
+	}
+	if policies[0].Name != "AppReadPolicy" || policies[1].Name != "DBREAD" {
+		t.Fatalf("unexpected policy names: %+v", policies)
+	}
+}
+
+func TestSearchManagedPoliciesBySubstring_DescriptionFilters(t *testing.T) {
+	mock := &mockIAMClient{
+		listPoliciesF: func(ctx context.Context, p *iam.ListPoliciesInput, o ...func(*iam.Options)) (*iam.ListPoliciesOutput, error) {
+			return &iam.ListPoliciesOutput{
+				Policies: []iamtypes.Policy{
+					{
+						PolicyName:  aws.String("ReadPolicyA"),
+						Arn:         aws.String("arn:aws:iam::123456789012:policy/ReadPolicyA"),
+						Description: aws.String("Read-only access for app"),
+					},
+					{
+						PolicyName:  aws.String("ReadPolicyB"),
+						Arn:         aws.String("arn:aws:iam::123456789012:policy/ReadPolicyB"),
+						Description: aws.String("Read access deprecated"),
+					},
+					{
+						PolicyName: aws.String("ReadPolicyC"),
+						Arn:        aws.String("arn:aws:iam::123456789012:policy/ReadPolicyC"),
+					},
+				},
+			}, nil
+		},
+	}
+
+	policies, err := SearchManagedPoliciesBySubstring(
+		context.Background(),
+		mock,
+		"read",
+		iamtypes.PolicyScopeTypeAll,
+		PolicySearchFilters{DescriptionContains: "read", DescriptionNotContains: "deprecated"},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(policies) != 1 {
+		t.Fatalf("expected 1 policy after description filters, got %d", len(policies))
+	}
+	if policies[0].Name != "ReadPolicyA" {
+		t.Fatalf("unexpected policy: %+v", policies[0])
 	}
 }

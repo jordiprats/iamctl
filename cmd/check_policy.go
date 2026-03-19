@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jordiprats/iamctl/pkg/awsiam"
 	"github.com/jordiprats/iamctl/pkg/boundary"
 	"github.com/jordiprats/iamctl/pkg/policy"
 	"github.com/spf13/cobra"
@@ -98,12 +99,12 @@ func newCheckPolicyCmd() *cobra.Command {
 			// Fetch managed policies from AWS if provided
 			if len(managedPolicies) > 0 {
 				ctx := cmd.Context()
-				iamClient, err := boundary.NewIAMClient(ctx, profile)
+				iamClient, err := awsiam.NewIAMClient(ctx, profile)
 				if err != nil {
 					return fmt.Errorf("creating AWS IAM client: %w", err)
 				}
 				for _, arn := range managedPolicies {
-					doc, err := boundary.FetchManagedPolicy(ctx, iamClient, arn)
+					doc, err := awsiam.FetchManagedPolicy(ctx, iamClient, arn)
 					if err != nil {
 						return err
 					}

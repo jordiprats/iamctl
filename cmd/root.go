@@ -18,6 +18,8 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newCheckRoleCmd())
 	root.AddCommand(newCheckCfCmd())
 	root.AddCommand(newDiffCmd())
+	root.AddCommand(newRoleListCmd())
+	root.AddCommand(newPolicyListCmd())
 	root.AddCommand(newPolicyFromRoleUsageCmd())
 	root.AddCommand(newShrinkRolePoliciesCmd())
 	root.AddCommand(GenDocsCmd(root))

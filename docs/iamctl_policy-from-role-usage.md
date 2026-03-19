@@ -18,6 +18,7 @@ iamctl policy-from-role-usage <role-name> [flags]
 ```
   -h, --help             help for policy-from-role-usage
       --profile string   AWS profile to use
+  -q, --quiet            Suppress informational output, print only the policy JSON
 ```
 
 ### SEE ALSO

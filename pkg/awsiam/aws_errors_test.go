@@ -1,4 +1,4 @@
-package boundary
+package awsiam
 
 import (
 	"context"
@@ -114,5 +114,31 @@ func TestFetchRolePolicies_FetchPolicyError(t *testing.T) {
 	_, err := FetchRolePolicies(context.Background(), mock, "role-bad-policy")
 	if err == nil {
 		t.Fatal("expected error when fetching policy fails")
+	}
+}
+
+func TestSearchRolesBySubstring_ListError(t *testing.T) {
+	mock := &mockIAMClient{
+		listRolesF: func(ctx context.Context, p *iam.ListRolesInput, o ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
+			return nil, fmt.Errorf("list roles failed")
+		},
+	}
+
+	_, err := SearchRolesBySubstring(context.Background(), mock, "ops", RoleSearchFilters{})
+	if err == nil {
+		t.Fatal("expected error from ListRoles")
+	}
+}
+
+func TestSearchManagedPoliciesBySubstring_ListError(t *testing.T) {
+	mock := &mockIAMClient{
+		listPoliciesF: func(ctx context.Context, p *iam.ListPoliciesInput, o ...func(*iam.Options)) (*iam.ListPoliciesOutput, error) {
+			return nil, fmt.Errorf("list policies failed")
+		},
+	}
+
+	_, err := SearchManagedPoliciesBySubstring(context.Background(), mock, "ops", iamtypes.PolicyScopeTypeAll, PolicySearchFilters{})
+	if err == nil {
+		t.Fatal("expected error from ListPolicies")
 	}
 }

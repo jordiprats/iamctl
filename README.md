@@ -9,10 +9,12 @@ This tool allows you to:
 1. **Single Action Check** (`check-action`): Verify if one or more AWS actions are allowed by your permission boundary.
 2. **Policy Validation** (`check-policy`): Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked.
 3. **Role Check** (`check-role`): Fetch all managed policies attached to an **IAM role** and evaluate them against the permission boundary.
-4. **CloudFormation Check** (`check-cf`): Analyze IAM roles and policies from a **CloudFormation template** against the permission boundary.
-5. **Diff** (`diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
-6. **Policy from Role Usage** (`policy-from-role-usage`): Generate a least-privilege policy based on a role's actual usage (service last accessed data).
-7. **Shrink Role Policies** (`shrink-role-policies`): Take a role's existing attached policies and remove unused actions based on actual usage.
+4. **Role List** (`role-list`): List IAM roles whose name contains a given string, with optional last-activity filtering.
+5. **Policy List** (`policy-list`): List IAM managed policies whose name contains a given string, with optional description filters.
+6. **CloudFormation Check** (`check-cf`): Analyze IAM roles and policies from a **CloudFormation template** against the permission boundary.
+7. **Diff** (`diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
+8. **Policy from Role Usage** (`policy-from-role-usage`): Generate a least-privilege policy based on a role's actual usage (service last accessed data).
+9. **Shrink Role Policies** (`shrink-role-policies`): Take a role's existing attached policies and remove unused actions based on actual usage.
 
 ## Installation
 
@@ -144,6 +146,70 @@ iamctl check-role --profile staging --output json my-role
 **Exit Codes:**
 - `0`: All actions are allowed
 - `1`: One or more actions are blocked
+
+---
+
+#### `role-list` — List IAM Roles
+
+Search IAM roles in the account whose role names contain a case-insensitive substring.
+
+```bash
+iamctl role-list [options] <query>
+```
+
+**Options:**
+- `--output <format>`: Output format — `list` or `json` (default: `list`)
+- `--profile <name>`: AWS profile to use
+- `--active-within-days <n>`: Filter roles active within the last N days
+
+**Examples:**
+
+```bash
+# List roles containing "app"
+iamctl role-list app
+
+# Include only roles active in the last 90 days
+iamctl role-list --active-within-days 90 app
+
+# Use a specific profile
+iamctl role-list --profile staging ops
+```
+
+---
+
+#### `policy-list` — List IAM Managed Policies
+
+Search IAM managed policies whose names contain a case-insensitive substring.
+
+```bash
+iamctl policy-list [options] <query>
+```
+
+**Options:**
+- `--output <format>`: Output format — `list` or `json` (default: `list`)
+- `--profile <name>`: AWS profile to use
+- `--scope <scope>`: Policy scope — `all`, `aws`, or `local` (default: `all`)
+- `--description-contains <text>`: Keep only matches whose description contains text
+- `--description-not-contains <text>`: Exclude matches whose description contains text
+
+**Examples:**
+
+```bash
+# List all managed policies containing "read"
+iamctl policy-list read
+
+# Search only customer-managed policies
+iamctl policy-list --scope local app
+
+# Keep only policies whose description contains "readonly"
+iamctl policy-list --description-contains readonly read
+
+# Exclude policies whose description contains "deprecated"
+iamctl policy-list --description-not-contains deprecated read
+
+# JSON output using a specific profile
+iamctl policy-list --output json --profile staging ops
+```
 
 ---
 

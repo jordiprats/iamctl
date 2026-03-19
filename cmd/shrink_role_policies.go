@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/jordiprats/iamctl/pkg/boundary"
+	"github.com/jordiprats/iamctl/pkg/awsiam"
 	"github.com/jordiprats/iamctl/pkg/matcher"
 	"github.com/jordiprats/iamctl/pkg/policy"
 	"github.com/spf13/cobra"
@@ -64,7 +64,7 @@ Deny statements, NotAction statements, Conditions, Resources, and Sids are prese
 			if !quiet {
 				fmt.Fprintf(os.Stderr, "Fetching policies for role: %s\n", roleArn)
 			}
-			policies, err := boundary.FetchRolePolicies(ctx, client, roleName)
+			policies, err := awsiam.FetchRolePolicies(ctx, client, roleName)
 			if err != nil {
 				return fmt.Errorf("fetching role policies: %w", err)
 			}

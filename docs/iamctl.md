@@ -20,5 +20,7 @@ Validate AWS IAM actions and policies against a permission boundary definition, 
 * [iamctl check-role](iamctl_check-role.md)	 - Fetch managed policies for an IAM role and check which actions are blocked by the permission boundary
 * [iamctl diff](iamctl_diff.md)	 - Compare policy actions against two permission boundaries to show what changes
 * [iamctl policy-from-role-usage](iamctl_policy-from-role-usage.md)	 - Generate a least-privilege policy based on a role's actual usage (service last accessed data)
+* [iamctl policy-list](iamctl_policy-list.md)	 - List IAM managed policies whose names contain a string
+* [iamctl role-list](iamctl_role-list.md)	 - List IAM roles whose names contain a string
 * [iamctl shrink-role-policies](iamctl_shrink-role-policies.md)	 - Generate a minimal policy for a role by removing unused actions from its attached policies
 

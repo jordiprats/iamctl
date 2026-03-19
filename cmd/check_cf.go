@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jordiprats/iamctl/pkg/awsiam"
 	"github.com/jordiprats/iamctl/pkg/boundary"
 	"github.com/jordiprats/iamctl/pkg/cfn"
 	"github.com/jordiprats/iamctl/pkg/policy"
@@ -155,10 +156,10 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 		needsAWS = true
 	}
 
-	var iamClient boundary.IAMClient
+	var iamClient awsiam.IAMClient
 	if needsAWS {
 		var err error
-		iamClient, err = boundary.NewIAMClient(ctx, profile)
+		iamClient, err = awsiam.NewIAMClient(ctx, profile)
 		if err != nil {
 			return false, err
 		}
@@ -178,14 +179,14 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 		pbArn := role.Properties.PermissionBoundary
 		fmt.Fprintf(os.Stderr, "Fetching permission boundary from template ARN: %s\n", pbArn)
 		var err error
-		pb, err = boundary.FetchManagedPolicyAsBoundary(ctx, iamClient, pbArn)
+		pb, err = awsiam.FetchManagedPolicyAsBoundary(ctx, iamClient, pbArn)
 		if err != nil {
 			return false, fmt.Errorf("fetching permission boundary %q: %w", pbArn, err)
 		}
 	} else if role.Properties.PermissionBoundaryRaw != nil {
 		// Resolve intrinsic function using AWS pseudo-parameters
 		fmt.Fprintf(os.Stderr, "Resolving PermissionsBoundary intrinsic function...\n")
-		pseudoParams, err := boundary.GetAWSPseudoParams(ctx, profile)
+		pseudoParams, err := awsiam.GetAWSPseudoParams(ctx, profile)
 		if err != nil {
 			return false, fmt.Errorf("fetching AWS context for intrinsic resolution: %w (use --pb to provide it manually)", err)
 		}
@@ -195,12 +196,12 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 		}
 		fmt.Fprintf(os.Stderr, "Resolved permission boundary ARN: %s\n", pbArn)
 		if iamClient == nil {
-			iamClient, err = boundary.NewIAMClient(ctx, profile)
+			iamClient, err = awsiam.NewIAMClient(ctx, profile)
 			if err != nil {
 				return false, err
 			}
 		}
-		pb, err = boundary.FetchManagedPolicyAsBoundary(ctx, iamClient, pbArn)
+		pb, err = awsiam.FetchManagedPolicyAsBoundary(ctx, iamClient, pbArn)
 		if err != nil {
 			return false, fmt.Errorf("fetching permission boundary %q: %w", pbArn, err)
 		}
@@ -242,7 +243,7 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 
 	// Resolve any intrinsic function ARNs in ManagedPolicyArns
 	if len(role.Properties.ManagedPolicyArnsRaw) > 0 {
-		pseudoParams, err := boundary.GetAWSPseudoParams(ctx, profile)
+		pseudoParams, err := awsiam.GetAWSPseudoParams(ctx, profile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not resolve intrinsic ManagedPolicyArns: %v\n", err)
 		} else {
@@ -260,7 +261,7 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 
 	for _, arn := range role.Properties.ManagedPolicyArns {
 		fmt.Fprintf(os.Stderr, "Fetching managed policy: %s\n", arn)
-		doc, err := boundary.FetchManagedPolicy(ctx, iamClient, arn)
+		doc, err := awsiam.FetchManagedPolicy(ctx, iamClient, arn)
 		if err != nil {
 			return false, fmt.Errorf("fetching managed policy %q: %w", arn, err)
 		}

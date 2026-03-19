@@ -1,4 +1,4 @@
-package boundary
+package awsiam
 
 import (
 	"context"
@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/jordiprats/iamctl/pkg/boundary"
 	"github.com/jordiprats/iamctl/pkg/policy"
 )
 
@@ -20,6 +25,33 @@ type IAMClient interface {
 	GetPolicy(ctx context.Context, params *iam.GetPolicyInput, optFns ...func(*iam.Options)) (*iam.GetPolicyOutput, error)
 	GetPolicyVersion(ctx context.Context, params *iam.GetPolicyVersionInput, optFns ...func(*iam.Options)) (*iam.GetPolicyVersionOutput, error)
 	ListAttachedRolePolicies(ctx context.Context, params *iam.ListAttachedRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+	ListRoles(ctx context.Context, params *iam.ListRolesInput, optFns ...func(*iam.Options)) (*iam.ListRolesOutput, error)
+	ListPolicies(ctx context.Context, params *iam.ListPoliciesInput, optFns ...func(*iam.Options)) (*iam.ListPoliciesOutput, error)
+}
+
+// RoleSummary represents a minimal role identity.
+type RoleSummary struct {
+	Name       string     `json:"name"`
+	ARN        string     `json:"arn"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
+// ManagedPolicySummary represents a minimal managed policy identity.
+type ManagedPolicySummary struct {
+	Name        string `json:"name"`
+	ARN         string `json:"arn"`
+	Description string `json:"description,omitempty"`
+}
+
+// RoleSearchFilters defines optional filters for role listing.
+type RoleSearchFilters struct {
+	LastActiveAfter *time.Time
+}
+
+// PolicySearchFilters defines optional filters for managed policy listing.
+type PolicySearchFilters struct {
+	DescriptionContains    string
+	DescriptionNotContains string
 }
 
 // NewIAMClient creates an IAM client using the given profile (or default credentials).
@@ -65,7 +97,7 @@ func GetAWSPseudoParams(ctx context.Context, profile string) (map[string]string,
 }
 
 // FetchRoleBoundary fetches the permission boundary attached to a role via the AWS API.
-func FetchRoleBoundary(ctx context.Context, client IAMClient, roleName string) (*PermissionBoundary, error) {
+func FetchRoleBoundary(ctx context.Context, client IAMClient, roleName string) (*boundary.PermissionBoundary, error) {
 	roleOut, err := client.GetRole(ctx, &iam.GetRoleInput{
 		RoleName: &roleName,
 	})
@@ -106,7 +138,7 @@ func FetchRoleBoundary(ctx context.Context, client IAMClient, roleName string) (
 		return nil, fmt.Errorf("parsing permission boundary document: %w", err)
 	}
 
-	return &PermissionBoundary{
+	return &boundary.PermissionBoundary{
 		Policy:           &doc,
 		EvaluationMethod: "Full IAM policy evaluation",
 	}, nil
@@ -152,12 +184,12 @@ func FetchRolePolicies(ctx context.Context, client IAMClient, roleName string) (
 }
 
 // FetchManagedPolicyAsBoundary fetches a managed policy by ARN and returns it as a PermissionBoundary.
-func FetchManagedPolicyAsBoundary(ctx context.Context, client IAMClient, policyARN string) (*PermissionBoundary, error) {
+func FetchManagedPolicyAsBoundary(ctx context.Context, client IAMClient, policyARN string) (*boundary.PermissionBoundary, error) {
 	doc, err := FetchManagedPolicy(ctx, client, policyARN)
 	if err != nil {
 		return nil, err
 	}
-	return &PermissionBoundary{
+	return &boundary.PermissionBoundary{
 		Policy:           doc,
 		EvaluationMethod: "Full IAM policy evaluation",
 	}, nil
@@ -191,4 +223,106 @@ func FetchManagedPolicy(ctx context.Context, client IAMClient, policyARN string)
 	}
 
 	return &doc, nil
+}
+
+// SearchRolesBySubstring lists account roles whose names contain query, case-insensitively.
+func SearchRolesBySubstring(ctx context.Context, client IAMClient, query string, filters RoleSearchFilters) ([]RoleSummary, error) {
+	needle := strings.ToLower(strings.TrimSpace(query))
+	if needle == "" {
+		return nil, fmt.Errorf("query must not be empty")
+	}
+
+	var roles []RoleSummary
+	var marker *string
+	for {
+		out, err := client.ListRoles(ctx, &iam.ListRolesInput{Marker: marker})
+		if err != nil {
+			return nil, fmt.Errorf("listing IAM roles: %w", err)
+		}
+
+		for _, role := range out.Roles {
+			if role.RoleName == nil || role.Arn == nil {
+				continue
+			}
+			if strings.Contains(strings.ToLower(*role.RoleName), needle) {
+				var lastUsedAt *time.Time
+				if role.RoleLastUsed != nil && role.RoleLastUsed.LastUsedDate != nil {
+					v := *role.RoleLastUsed.LastUsedDate
+					lastUsedAt = &v
+				}
+
+				if filters.LastActiveAfter != nil {
+					if lastUsedAt == nil || lastUsedAt.Before(*filters.LastActiveAfter) {
+						continue
+					}
+				}
+
+				roles = append(roles, RoleSummary{Name: *role.RoleName, ARN: *role.Arn, LastUsedAt: lastUsedAt})
+			}
+		}
+
+		if !out.IsTruncated {
+			break
+		}
+		marker = out.Marker
+	}
+
+	sort.Slice(roles, func(i, j int) bool {
+		return roles[i].Name < roles[j].Name
+	})
+
+	return roles, nil
+}
+
+// SearchManagedPoliciesBySubstring lists managed policies whose names contain query, case-insensitively.
+// Scope can be "All", "AWS", or "Local".
+func SearchManagedPoliciesBySubstring(ctx context.Context, client IAMClient, query string, scope iamtypes.PolicyScopeType, filters PolicySearchFilters) ([]ManagedPolicySummary, error) {
+	needle := strings.ToLower(strings.TrimSpace(query))
+	if needle == "" {
+		return nil, fmt.Errorf("query must not be empty")
+	}
+	containsNeedle := strings.ToLower(strings.TrimSpace(filters.DescriptionContains))
+	notContainsNeedle := strings.ToLower(strings.TrimSpace(filters.DescriptionNotContains))
+
+	var policies []ManagedPolicySummary
+	var marker *string
+	for {
+		out, err := client.ListPolicies(ctx, &iam.ListPoliciesInput{Marker: marker, Scope: scope})
+		if err != nil {
+			return nil, fmt.Errorf("listing IAM managed policies: %w", err)
+		}
+
+		for _, p := range out.Policies {
+			if p.PolicyName == nil || p.Arn == nil {
+				continue
+			}
+			if strings.Contains(strings.ToLower(*p.PolicyName), needle) {
+				description := ""
+				if p.Description != nil {
+					description = *p.Description
+				}
+
+				lowerDesc := strings.ToLower(description)
+				if containsNeedle != "" && !strings.Contains(lowerDesc, containsNeedle) {
+					continue
+				}
+				if notContainsNeedle != "" && strings.Contains(lowerDesc, notContainsNeedle) {
+					continue
+				}
+
+				policies = append(policies, ManagedPolicySummary{Name: *p.PolicyName, ARN: *p.Arn, Description: description})
+			}
+		}
+
+		if !out.IsTruncated {
+			break
+		}
+		marker = out.Marker
+	}
+
+	sort.Slice(policies, func(i, j int) bool {
+		return policies[i].Name < policies[j].Name
+	})
+
+	return policies, nil
 }
