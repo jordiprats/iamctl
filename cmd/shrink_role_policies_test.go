@@ -288,6 +288,63 @@ func TestShrinkDocument_StrictDedupesEquivalentStatements(t *testing.T) {
 	}
 }
 
+func TestShrinkDocument_StrictPreservesTargetedResources(t *testing.T) {
+	doc := policy.PolicyDocument{
+		Version: "2012-10-17",
+		Statement: []policy.Statement{
+			{Sid: "One", Effect: "Allow", Action: "logs:CreateLogStream", Resource: "*"},
+			{Sid: "Two", Effect: "Allow", Action: "logs:CreateLogStream", Resource: []interface{}{"arn:aws:logs:*:*:log-group:/aws/lambda-insights:*"}},
+			{Effect: "Allow", Action: "logs:CreateLogStream", Resource: []interface{}{"*"}},
+		},
+	}
+	accessed := map[string]string{
+		"logs:createlogstream": "logs:CreateLogStream",
+	}
+
+	shrunk, _ := shrinkDocument(doc, accessed, shrinkOptions{strict: true})
+
+	if len(shrunk.Statement) != 2 {
+		t.Fatalf("expected wildcard duplicate to collapse but targeted resource to remain, got %d statements", len(shrunk.Statement))
+	}
+
+	var hasWildcard bool
+	var hasTargeted bool
+	for _, stmt := range shrunk.Statement {
+		resource, ok := stmt.Resource.(string)
+		if !ok {
+			t.Fatalf("expected normalized resource strings, got %T", stmt.Resource)
+		}
+		if resource == "*" {
+			hasWildcard = true
+		}
+		if resource == "arn:aws:logs:*:*:log-group:/aws/lambda-insights:*" {
+			hasTargeted = true
+		}
+	}
+	if !hasWildcard || !hasTargeted {
+		t.Fatalf("expected both wildcard and targeted resources, got %+v", shrunk.Statement)
+	}
+}
+
+func TestShrinkDocument_DedupesRemovedActions(t *testing.T) {
+	doc := policy.PolicyDocument{
+		Version: "2012-10-17",
+		Statement: []policy.Statement{
+			{Effect: "Allow", Action: "s3:GetObject", Resource: "*"},
+			{Effect: "Allow", Action: []interface{}{"s3:GetObject", "s3:PutObject"}, Resource: "*"},
+		},
+	}
+
+	_, removed := shrinkDocument(doc, map[string]string{}, shrinkOptions{})
+
+	if len(removed) != 2 {
+		t.Fatalf("expected unique removed actions, got %d: %v", len(removed), removed)
+	}
+	if removed[0] != "s3:GetObject" || removed[1] != "s3:PutObject" {
+		t.Fatalf("expected sorted unique removed actions, got %v", removed)
+	}
+}
+
 func TestIsActionAccessed_DirectMatch(t *testing.T) {
 	accessed := map[string]string{"s3:getobject": "s3:GetObject"}
 	if !isActionAccessed("s3:GetObject", accessed) {

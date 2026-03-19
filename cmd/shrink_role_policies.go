@@ -30,7 +30,7 @@ data (at ACTION_LEVEL granularity) to identify which actions are actually being 
 Outputs a single consolidated policy containing only the actions the role has really used.
 Deny statements, NotAction statements, Conditions, Resources, and Sids are preserved as-is by default.
 Use --ignore-deny to omit Deny statements from the output.
-Use --strict to expand wildcard actions to exact observed actions and deduplicate equivalent statements.`,
+Use --strict to expand wildcard actions to exact observed actions and deduplicate equivalent statements while preserving targeted resources.`,
 		Args: cobra.ExactArgs(1),
 		Example: `  iamctl shrink-role-policies my-role
   iamctl shrink-role-policies --profile staging my-role`,
@@ -119,7 +119,7 @@ Use --strict to expand wildcard actions to exact observed actions and deduplicat
 	cmd.Flags().String("profile", "", "AWS profile to use")
 	cmd.Flags().BoolP("quiet", "q", false, "Suppress informational output, print only the policy JSON")
 	cmd.Flags().Bool("ignore-deny", false, "Omit Deny statements from the output policy")
-	cmd.Flags().Bool("strict", false, "Expand wildcard actions to exact observed actions and deduplicate equivalent statements")
+	cmd.Flags().Bool("strict", false, "Expand wildcard actions to exact observed actions and deduplicate equivalent statements while preserving targeted resources")
 
 	return cmd
 }
@@ -273,8 +273,10 @@ func shrinkDocument(doc policy.PolicyDocument, accessed map[string]string, opts 
 	}
 
 	if opts.strict {
-		kept = dedupeStatements(kept)
+		kept = compactStatements(kept)
 	}
+	removed = dedupeStrings(removed)
+	sort.Strings(removed)
 
 	return policy.PolicyDocument{
 		Version:   doc.Version,
@@ -371,6 +373,110 @@ func dedupeStatements(statements []policy.Statement) []policy.Statement {
 		}
 		seen[key] = struct{}{}
 		result = append(result, stmt)
+	}
+	return result
+}
+
+func compactStatements(statements []policy.Statement) []policy.Statement {
+	if len(statements) < 2 {
+		return normalizeStatements(statements)
+	}
+
+	type aggregate struct {
+		statement policy.Statement
+		count     int
+	}
+
+	aggregates := make(map[string]*aggregate, len(statements))
+	order := make([]string, 0, len(statements))
+
+	for _, stmt := range normalizeStatements(statements) {
+		key, err := statementKeyWithoutSid(stmt)
+		if err != nil {
+			keyBytes, marshalErr := json.Marshal(stmt)
+			if marshalErr != nil {
+				key = fmt.Sprintf("fallback:%d", len(order))
+			} else {
+				key = string(keyBytes)
+			}
+		}
+
+		agg, ok := aggregates[key]
+		if !ok {
+			agg = &aggregate{statement: stmt}
+			aggregates[key] = agg
+			order = append(order, key)
+		}
+		agg.count++
+	}
+
+	result := make([]policy.Statement, 0, len(order))
+	for _, key := range order {
+		agg := aggregates[key]
+		stmt := agg.statement
+		if agg.count > 1 {
+			stmt.Sid = ""
+		}
+
+		result = append(result, stmt)
+	}
+
+	return result
+}
+
+func normalizeStatements(statements []policy.Statement) []policy.Statement {
+	result := make([]policy.Statement, 0, len(statements))
+	for _, stmt := range statements {
+		normalized := stmt
+		if values, ok := normalizeStringValue(stmt.Action); ok {
+			normalized.Action = makeStringOrSlice(values)
+		}
+		if values, ok := normalizeStringValue(stmt.NotAction); ok {
+			normalized.NotAction = makeStringOrSlice(values)
+		}
+		if values, ok := normalizeStringValue(stmt.Resource); ok {
+			normalized.Resource = makeStringOrSlice(values)
+		}
+		if values, ok := normalizeStringValue(stmt.NotResource); ok {
+			normalized.NotResource = makeStringOrSlice(values)
+		}
+		result = append(result, normalized)
+	}
+	return result
+}
+
+func statementKeyWithoutSid(stmt policy.Statement) (string, error) {
+	keyStmt := stmt
+	keyStmt.Sid = ""
+	keyBytes, err := json.Marshal(keyStmt)
+	if err != nil {
+		return "", err
+	}
+	return string(keyBytes), nil
+}
+
+func normalizeStringValue(value interface{}) ([]string, bool) {
+	if value == nil {
+		return nil, false
+	}
+
+	values := matcher.ExtractStrings(value)
+	if len(values) == 0 {
+		return nil, false
+	}
+
+	values = dedupeStrings(values)
+	sort.Strings(values)
+	return values, true
+}
+
+func makeStringOrSlice(values []string) interface{} {
+	if len(values) == 1 {
+		return values[0]
+	}
+	result := make([]interface{}, len(values))
+	for i, value := range values {
+		result[i] = value
 	}
 	return result
 }
