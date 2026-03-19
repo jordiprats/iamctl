@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,7 +29,8 @@ data (at ACTION_LEVEL granularity) to identify which actions are actually being 
 
 Outputs a single consolidated policy containing only the actions the role has really used.
 Deny statements, NotAction statements, Conditions, Resources, and Sids are preserved as-is by default.
-Use --ignore-deny to omit Deny statements from the output.`,
+Use --ignore-deny to omit Deny statements from the output.
+Use --strict to expand wildcard actions to exact observed actions and deduplicate equivalent statements.`,
 		Args: cobra.ExactArgs(1),
 		Example: `  iamctl shrink-role-policies my-role
   iamctl shrink-role-policies --profile staging my-role`,
@@ -36,6 +38,7 @@ Use --ignore-deny to omit Deny statements from the output.`,
 			profile, _ := cmd.Flags().GetString("profile")
 			quiet, _ := cmd.Flags().GetBool("quiet")
 			ignoreDeny, _ := cmd.Flags().GetBool("ignore-deny")
+			strict, _ := cmd.Flags().GetBool("strict")
 			roleName := args[0]
 
 			ctx := cmd.Context()
@@ -90,7 +93,10 @@ Use --ignore-deny to omit Deny statements from the output.`,
 			}
 
 			// Shrink the policy
-			shrunk, removed := shrinkDocument(doc, accessedActions, ignoreDeny)
+			shrunk, removed := shrinkDocument(doc, accessedActions, shrinkOptions{
+				ignoreDeny: ignoreDeny,
+				strict:     strict,
+			})
 
 			if !quiet {
 				if len(removed) > 0 {
@@ -113,13 +119,14 @@ Use --ignore-deny to omit Deny statements from the output.`,
 	cmd.Flags().String("profile", "", "AWS profile to use")
 	cmd.Flags().BoolP("quiet", "q", false, "Suppress informational output, print only the policy JSON")
 	cmd.Flags().Bool("ignore-deny", false, "Omit Deny statements from the output policy")
+	cmd.Flags().Bool("strict", false, "Expand wildcard actions to exact observed actions and deduplicate equivalent statements")
 
 	return cmd
 }
 
 // fetchAccessedActions retrieves ACTION_LEVEL last accessed data for an ARN
-// and returns a set of lowercase "service:Action" strings that were actually used.
-func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (map[string]bool, *iam.GetServiceLastAccessedDetailsOutput, error) {
+// and returns a map of lowercase "service:action" to canonical "service:Action" strings.
+func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (map[string]string, *iam.GetServiceLastAccessedDetailsOutput, error) {
 	genOut, err := client.GenerateServiceLastAccessedDetails(ctx, &iam.GenerateServiceLastAccessedDetailsInput{
 		Arn:         &arn,
 		Granularity: iamtypes.AccessAdvisorUsageGranularityTypeActionLevel,
@@ -151,7 +158,7 @@ func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (
 		}
 	}
 
-	accessed := make(map[string]bool)
+	accessed := make(map[string]string)
 
 	// Collect all pages
 	services := details.ServicesLastAccessed
@@ -178,8 +185,9 @@ func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (
 		}
 		for _, action := range svc.TrackedActionsLastAccessed {
 			if action.LastAccessedEntity != nil {
-				key := strings.ToLower(fmt.Sprintf("%s:%s", *svc.ServiceNamespace, *action.ActionName))
-				accessed[key] = true
+				canonical := fmt.Sprintf("%s:%s", *svc.ServiceNamespace, *action.ActionName)
+				key := strings.ToLower(canonical)
+				accessed[key] = canonical
 			}
 		}
 	}
@@ -187,18 +195,23 @@ func fetchAccessedActions(ctx context.Context, client *iam.Client, arn string) (
 	return accessed, details, nil
 }
 
+type shrinkOptions struct {
+	ignoreDeny bool
+	strict     bool
+}
+
 // shrinkDocument removes unused Allow actions from a policy document.
 // Deny statements are kept unless ignoreDeny is true.
 // NotAction statements and non-Action statements are kept as-is.
 // Returns the shrunk document and a list of removed actions.
-func shrinkDocument(doc policy.PolicyDocument, accessed map[string]bool, ignoreDeny bool) (policy.PolicyDocument, []string) {
+func shrinkDocument(doc policy.PolicyDocument, accessed map[string]string, opts shrinkOptions) (policy.PolicyDocument, []string) {
 	var kept []policy.Statement
 	var removed []string
 
 	for _, stmt := range doc.Statement {
 		// Keep Deny statements unless explicitly ignored
 		if strings.EqualFold(stmt.Effect, "Deny") {
-			if ignoreDeny {
+			if opts.ignoreDeny {
 				continue
 			}
 			kept = append(kept, stmt)
@@ -220,12 +233,24 @@ func shrinkDocument(doc policy.PolicyDocument, accessed map[string]bool, ignoreD
 		actions := matcher.ExtractStrings(stmt.Action)
 		var surviving []string
 		for _, a := range actions {
+			if opts.strict {
+				matches := matchedAccessedActions(a, accessed)
+				if len(matches) > 0 {
+					surviving = append(surviving, matches...)
+				} else {
+					removed = append(removed, a)
+				}
+				continue
+			}
+
 			if isActionAccessed(a, accessed) {
 				surviving = append(surviving, a)
 			} else {
 				removed = append(removed, a)
 			}
 		}
+
+		surviving = dedupeStrings(surviving)
 
 		if len(surviving) == 0 {
 			// Entire statement pruned
@@ -247,6 +272,10 @@ func shrinkDocument(doc policy.PolicyDocument, accessed map[string]bool, ignoreD
 		kept = append(kept, newStmt)
 	}
 
+	if opts.strict {
+		kept = dedupeStatements(kept)
+	}
+
 	return policy.PolicyDocument{
 		Version:   doc.Version,
 		Statement: kept,
@@ -255,11 +284,11 @@ func shrinkDocument(doc policy.PolicyDocument, accessed map[string]bool, ignoreD
 
 // isActionAccessed checks if a policy action (which may contain wildcards)
 // matches any of the actually-accessed actions.
-func isActionAccessed(policyAction string, accessed map[string]bool) bool {
+func isActionAccessed(policyAction string, accessed map[string]string) bool {
 	lower := strings.ToLower(policyAction)
 
 	// Direct match (common case)
-	if accessed[lower] {
+	if _, ok := accessed[lower]; ok {
 		return true
 	}
 
@@ -278,6 +307,72 @@ func isActionAccessed(policyAction string, accessed map[string]bool) bool {
 	}
 
 	return false
+}
+
+func matchedAccessedActions(policyAction string, accessed map[string]string) []string {
+	lower := strings.ToLower(policyAction)
+	if canonical, ok := accessed[lower]; ok {
+		return []string{canonical}
+	}
+
+	if !matcher.IsWildcardAction(policyAction) {
+		return nil
+	}
+
+	re, err := matcher.IamPatternToRegex(policyAction)
+	if err != nil {
+		return []string{policyAction}
+	}
+
+	var matches []string
+	for lowerAction, canonical := range accessed {
+		if re.MatchString(lowerAction) {
+			matches = append(matches, canonical)
+		}
+	}
+
+	sort.Strings(matches)
+	return dedupeStrings(matches)
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func dedupeStatements(statements []policy.Statement) []policy.Statement {
+	if len(statements) < 2 {
+		return statements
+	}
+
+	seen := make(map[string]struct{}, len(statements))
+	result := make([]policy.Statement, 0, len(statements))
+	for _, stmt := range statements {
+		keyBytes, err := json.Marshal(stmt)
+		if err != nil {
+			result = append(result, stmt)
+			continue
+		}
+		key := string(keyBytes)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, stmt)
+	}
+	return result
 }
 
 // mergePolicyDocs merges multiple policy documents into one.

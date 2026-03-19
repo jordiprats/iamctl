@@ -9,20 +9,18 @@ import (
 func TestShrinkDocument_RemovesUnusedActions(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Effect:   "Allow",
-				Action:   []interface{}{"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
-				Resource: "*",
-			},
-		},
+		Statement: []policy.Statement{{
+			Effect:   "Allow",
+			Action:   []interface{}{"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+			Resource: "*",
+		}},
 	}
-	accessed := map[string]bool{
-		"s3:getobject": true,
-		"s3:putobject": true,
+	accessed := map[string]string{
+		"s3:getobject": "s3:GetObject",
+		"s3:putobject": "s3:PutObject",
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed, false)
+	shrunk, removed := shrinkDocument(doc, accessed, shrinkOptions{})
 
 	if len(removed) != 1 {
 		t.Fatalf("expected 1 removed action, got %d: %v", len(removed), removed)
@@ -38,17 +36,14 @@ func TestShrinkDocument_RemovesUnusedActions(t *testing.T) {
 func TestShrinkDocument_PreservesDenyStatements(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Effect:   "Deny",
-				Action:   []interface{}{"iam:*"},
-				Resource: "*",
-			},
-		},
+		Statement: []policy.Statement{{
+			Effect:   "Deny",
+			Action:   []interface{}{"iam:*"},
+			Resource: "*",
+		}},
 	}
-	accessed := map[string]bool{}
 
-	shrunk, removed := shrinkDocument(doc, accessed, false)
+	shrunk, removed := shrinkDocument(doc, map[string]string{}, shrinkOptions{})
 
 	if len(removed) != 0 {
 		t.Fatalf("Deny statements should not be pruned, got %d removed", len(removed))
@@ -64,17 +59,14 @@ func TestShrinkDocument_PreservesDenyStatements(t *testing.T) {
 func TestShrinkDocument_IgnoresDenyStatementsWhenFlagSet(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Effect:   "Deny",
-				Action:   []interface{}{"iam:*"},
-				Resource: "*",
-			},
-		},
+		Statement: []policy.Statement{{
+			Effect:   "Deny",
+			Action:   []interface{}{"iam:*"},
+			Resource: "*",
+		}},
 	}
-	accessed := map[string]bool{}
 
-	shrunk, removed := shrinkDocument(doc, accessed, true)
+	shrunk, removed := shrinkDocument(doc, map[string]string{}, shrinkOptions{ignoreDeny: true})
 
 	if len(removed) != 0 {
 		t.Fatalf("Deny statements should be ignored without adding removed actions, got %d removed", len(removed))
@@ -87,17 +79,14 @@ func TestShrinkDocument_IgnoresDenyStatementsWhenFlagSet(t *testing.T) {
 func TestShrinkDocument_PreservesNotActionStatements(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Effect:    "Allow",
-				NotAction: []interface{}{"iam:*"},
-				Resource:  "*",
-			},
-		},
+		Statement: []policy.Statement{{
+			Effect:    "Allow",
+			NotAction: []interface{}{"iam:*"},
+			Resource:  "*",
+		}},
 	}
-	accessed := map[string]bool{}
 
-	shrunk, removed := shrinkDocument(doc, accessed, false)
+	shrunk, removed := shrinkDocument(doc, map[string]string{}, shrinkOptions{})
 
 	if len(removed) != 0 {
 		t.Fatalf("NotAction statements should not be pruned, got %d removed", len(removed))
@@ -110,17 +99,14 @@ func TestShrinkDocument_PreservesNotActionStatements(t *testing.T) {
 func TestShrinkDocument_RemovesEntireStatementIfAllUnused(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Effect:   "Allow",
-				Action:   []interface{}{"s3:GetObject"},
-				Resource: "*",
-			},
-		},
+		Statement: []policy.Statement{{
+			Effect:   "Allow",
+			Action:   []interface{}{"s3:GetObject"},
+			Resource: "*",
+		}},
 	}
-	accessed := map[string]bool{}
 
-	shrunk, removed := shrinkDocument(doc, accessed, false)
+	shrunk, removed := shrinkDocument(doc, map[string]string{}, shrinkOptions{})
 
 	if len(removed) != 1 {
 		t.Fatalf("expected 1 removed action, got %d", len(removed))
@@ -133,19 +119,17 @@ func TestShrinkDocument_RemovesEntireStatementIfAllUnused(t *testing.T) {
 func TestShrinkDocument_SingleSurvivingActionBecomesString(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Effect:   "Allow",
-				Action:   []interface{}{"s3:GetObject", "s3:PutObject"},
-				Resource: "*",
-			},
-		},
+		Statement: []policy.Statement{{
+			Effect:   "Allow",
+			Action:   []interface{}{"s3:GetObject", "s3:PutObject"},
+			Resource: "*",
+		}},
 	}
-	accessed := map[string]bool{
-		"s3:getobject": true,
+	accessed := map[string]string{
+		"s3:getobject": "s3:GetObject",
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed, false)
+	shrunk, removed := shrinkDocument(doc, accessed, shrinkOptions{})
 
 	if len(removed) != 1 {
 		t.Fatalf("expected 1 removed, got %d", len(removed))
@@ -162,16 +146,13 @@ func TestShrinkDocument_SingleSurvivingActionBecomesString(t *testing.T) {
 func TestShrinkDocument_PreservesStatementsWithNilAction(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Effect:   "Allow",
-				Resource: "*",
-			},
-		},
+		Statement: []policy.Statement{{
+			Effect:   "Allow",
+			Resource: "*",
+		}},
 	}
-	accessed := map[string]bool{}
 
-	shrunk, _ := shrinkDocument(doc, accessed, false)
+	shrunk, _ := shrinkDocument(doc, map[string]string{}, shrinkOptions{})
 
 	if len(shrunk.Statement) != 1 {
 		t.Fatalf("expected 1 statement preserved (nil Action), got %d", len(shrunk.Statement))
@@ -181,21 +162,19 @@ func TestShrinkDocument_PreservesStatementsWithNilAction(t *testing.T) {
 func TestShrinkDocument_PreservesSidAndCondition(t *testing.T) {
 	doc := policy.PolicyDocument{
 		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{
-				Sid:       "AllowS3",
-				Effect:    "Allow",
-				Action:    []interface{}{"s3:GetObject", "s3:PutObject"},
-				Resource:  "arn:aws:s3:::my-bucket/*",
-				Condition: map[string]interface{}{"StringEquals": map[string]interface{}{"s3:prefix": "home/"}},
-			},
-		},
+		Statement: []policy.Statement{{
+			Sid:       "AllowS3",
+			Effect:    "Allow",
+			Action:    []interface{}{"s3:GetObject", "s3:PutObject"},
+			Resource:  "arn:aws:s3:::my-bucket/*",
+			Condition: map[string]interface{}{"StringEquals": map[string]interface{}{"s3:prefix": "home/"}},
+		}},
 	}
-	accessed := map[string]bool{
-		"s3:getobject": true,
+	accessed := map[string]string{
+		"s3:getobject": "s3:GetObject",
 	}
 
-	shrunk, _ := shrinkDocument(doc, accessed, false)
+	shrunk, _ := shrinkDocument(doc, accessed, shrinkOptions{})
 
 	if len(shrunk.Statement) != 1 {
 		t.Fatalf("expected 1 statement, got %d", len(shrunk.Statement))
@@ -221,16 +200,15 @@ func TestShrinkDocument_MixedStatements(t *testing.T) {
 			{Effect: "Allow", NotAction: []interface{}{"sts:*"}, Resource: "*"},
 		},
 	}
-	accessed := map[string]bool{
-		"s3:getobject": true,
+	accessed := map[string]string{
+		"s3:getobject": "s3:GetObject",
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed, false)
+	shrunk, removed := shrinkDocument(doc, accessed, shrinkOptions{})
 
 	if len(removed) != 2 {
 		t.Fatalf("expected 2 removed, got %d: %v", len(removed), removed)
 	}
-	// Deny + NotAction + surviving Allow = 3 statements
 	if len(shrunk.Statement) != 3 {
 		t.Fatalf("expected 3 statements, got %d", len(shrunk.Statement))
 	}
@@ -238,16 +216,14 @@ func TestShrinkDocument_MixedStatements(t *testing.T) {
 
 func TestShrinkDocument_StringAction(t *testing.T) {
 	doc := policy.PolicyDocument{
-		Version: "2012-10-17",
-		Statement: []policy.Statement{
-			{Effect: "Allow", Action: "s3:GetObject", Resource: "*"},
-		},
+		Version:   "2012-10-17",
+		Statement: []policy.Statement{{Effect: "Allow", Action: "s3:GetObject", Resource: "*"}},
 	}
-	accessed := map[string]bool{
-		"s3:getobject": true,
+	accessed := map[string]string{
+		"s3:getobject": "s3:GetObject",
 	}
 
-	shrunk, removed := shrinkDocument(doc, accessed, false)
+	shrunk, removed := shrinkDocument(doc, accessed, shrinkOptions{})
 
 	if len(removed) != 0 {
 		t.Fatalf("expected 0 removed, got %d", len(removed))
@@ -257,28 +233,79 @@ func TestShrinkDocument_StringAction(t *testing.T) {
 	}
 }
 
-func TestIsActionAccessed_DirectMatch(t *testing.T) {
-	accessed := map[string]bool{
-		"s3:getobject": true,
+func TestShrinkDocument_StrictExpandsWildcardActions(t *testing.T) {
+	doc := policy.PolicyDocument{
+		Version:   "2012-10-17",
+		Statement: []policy.Statement{{Effect: "Allow", Action: "s3:*", Resource: "*"}},
 	}
+	accessed := map[string]string{
+		"s3:getbucketlocation": "s3:GetBucketLocation",
+		"s3:getobject":         "s3:GetObject",
+		"s3:putobject":         "s3:PutObject",
+	}
+
+	shrunk, removed := shrinkDocument(doc, accessed, shrinkOptions{strict: true})
+
+	if len(removed) != 0 {
+		t.Fatalf("expected wildcard action to expand instead of being removed, got %v", removed)
+	}
+	if len(shrunk.Statement) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(shrunk.Statement))
+	}
+	actions, ok := shrunk.Statement[0].Action.([]interface{})
+	if !ok {
+		t.Fatalf("expected []interface{} action list, got %T", shrunk.Statement[0].Action)
+	}
+	if len(actions) != 3 {
+		t.Fatalf("expected 3 expanded actions, got %d", len(actions))
+	}
+}
+
+func TestShrinkDocument_StrictDedupesEquivalentStatements(t *testing.T) {
+	doc := policy.PolicyDocument{
+		Version: "2012-10-17",
+		Statement: []policy.Statement{
+			{Effect: "Allow", Action: "s3:*", Resource: "*"},
+			{Effect: "Allow", Action: []interface{}{"s3:GetObject", "s3:PutObject"}, Resource: "*"},
+		},
+	}
+	accessed := map[string]string{
+		"s3:getobject": "s3:GetObject",
+		"s3:putobject": "s3:PutObject",
+	}
+
+	shrunk, _ := shrinkDocument(doc, accessed, shrinkOptions{strict: true})
+
+	if len(shrunk.Statement) != 1 {
+		t.Fatalf("expected equivalent statements to be deduplicated, got %d", len(shrunk.Statement))
+	}
+	actions, ok := shrunk.Statement[0].Action.([]interface{})
+	if !ok {
+		t.Fatalf("expected []interface{} action list, got %T", shrunk.Statement[0].Action)
+	}
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions after dedupe, got %d", len(actions))
+	}
+}
+
+func TestIsActionAccessed_DirectMatch(t *testing.T) {
+	accessed := map[string]string{"s3:getobject": "s3:GetObject"}
 	if !isActionAccessed("s3:GetObject", accessed) {
 		t.Error("expected case-insensitive match for s3:GetObject")
 	}
 }
 
 func TestIsActionAccessed_NoMatch(t *testing.T) {
-	accessed := map[string]bool{
-		"s3:getobject": true,
-	}
+	accessed := map[string]string{"s3:getobject": "s3:GetObject"}
 	if isActionAccessed("s3:PutObject", accessed) {
 		t.Error("s3:PutObject should not match")
 	}
 }
 
 func TestIsActionAccessed_WildcardMatch(t *testing.T) {
-	accessed := map[string]bool{
-		"s3:getobject": true,
-		"s3:putobject": true,
+	accessed := map[string]string{
+		"s3:getobject": "s3:GetObject",
+		"s3:putobject": "s3:PutObject",
 	}
 	if !isActionAccessed("s3:*", accessed) {
 		t.Error("s3:* should match accessed s3 actions")
@@ -286,18 +313,16 @@ func TestIsActionAccessed_WildcardMatch(t *testing.T) {
 }
 
 func TestIsActionAccessed_WildcardNoMatch(t *testing.T) {
-	accessed := map[string]bool{
-		"ec2:describeinstances": true,
-	}
+	accessed := map[string]string{"ec2:describeinstances": "ec2:DescribeInstances"}
 	if isActionAccessed("s3:*", accessed) {
 		t.Error("s3:* should not match ec2 actions")
 	}
 }
 
 func TestIsActionAccessed_PartialWildcard(t *testing.T) {
-	accessed := map[string]bool{
-		"s3:getobject":       true,
-		"s3:getbucketpolicy": true,
+	accessed := map[string]string{
+		"s3:getobject":       "s3:GetObject",
+		"s3:getbucketpolicy": "s3:GetBucketPolicy",
 	}
 	if !isActionAccessed("s3:Get*", accessed) {
 		t.Error("s3:Get* should match s3:getobject")
@@ -305,7 +330,7 @@ func TestIsActionAccessed_PartialWildcard(t *testing.T) {
 }
 
 func TestIsActionAccessed_EmptyAccessed(t *testing.T) {
-	accessed := map[string]bool{}
+	accessed := map[string]string{}
 	if isActionAccessed("s3:GetObject", accessed) {
 		t.Error("nothing accessed, should return false")
 	}
@@ -318,9 +343,11 @@ func TestMergePolicyDocs(t *testing.T) {
 	policies := map[string]policy.PolicyDocument{
 		"PolicyA": {
 			Version: "2012-10-17",
-			Statement: []policy.Statement{
-				{Effect: "Allow", Action: "s3:GetObject", Resource: "*"},
-			},
+			Statement: []policy.Statement{{
+				Effect:   "Allow",
+				Action:   "s3:GetObject",
+				Resource: "*",
+			}},
 		},
 		"PolicyB": {
 			Version: "2012-10-17",
