@@ -17,9 +17,10 @@ import (
 
 func newPolicyFromRoleUsageCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "policy-from-role-usage <role-name>",
-		Short: "Generate a least-privilege policy based on a role's actual usage (service last accessed data)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "policy-from-role-usage <role-name>",
+		Aliases: []string{"activity-policy", "policy-from-usage", "pfu"},
+		Short:   "Generate a least-privilege policy based on a role's actual usage (service last accessed data)",
+		Args:    cobra.ExactArgs(1),
 		Example: `  iamctl policy-from-role-usage my-role
   iamctl policy-from-role-usage --profile staging my-role`,
 		RunE: func(cmd *cobra.Command, args []string) error {
