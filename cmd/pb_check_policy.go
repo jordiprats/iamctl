@@ -15,17 +15,17 @@ import (
 
 func newCheckPolicyCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "check-policy [policy-file]",
-		Aliases: []string{"cp"},
-		Short:   "Check which actions in a policy are allowed or blocked by the permission boundary",
+		Use:     "pb-check-policy [policy-file]",
+		Aliases: []string{"check-policy", "cp"},
+		Short:   "Check which policy actions are allowed or blocked by a permission boundary",
 		Args:    cobra.MaximumNArgs(1),
-		Example: `  iamctl check-policy --pb boundary.json policy.json
-  iamctl check-policy --pb boundary.json --policy-file extra.json policy.json
-  iamctl check-policy --pb boundary.json --policy-file a.json --policy-file b.json
-  iamctl check-policy --pb boundary.json --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
-  iamctl check-policy --pb boundary.json --output json policy.json
-  iamctl check-policy --pb boundary.json --output table policy.json
-  cat policy.json | iamctl check-policy --pb boundary.json -`,
+		Example: `  iamctl pb-check-policy --pb boundary.json policy.json
+	iamctl pb-check-policy --pb boundary.json --policy-file extra.json policy.json
+	iamctl pb-check-policy --pb boundary.json --policy-file a.json --policy-file b.json
+	iamctl pb-check-policy --pb boundary.json --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
+	iamctl pb-check-policy --pb boundary.json --output json policy.json
+	iamctl pb-check-policy --pb boundary.json --output table policy.json
+	cat policy.json | iamctl pb-check-policy --pb boundary.json -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			format, _ := cmd.Flags().GetString("output")

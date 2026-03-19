@@ -6,8 +6,8 @@ import "github.com/spf13/cobra"
 func NewRootCmd(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "iamctl",
-		Short: "AWS IAM Swiss Army Knife",
-		Long:  "Validate AWS IAM actions and policies against a permission boundary definition, generate least-privilege policies, and more.",
+		Short: "Inspect IAM and analyze permission boundaries",
+		Long:  "Inspect AWS IAM roles and policies, validate access against permission boundaries, generate least-privilege policies, and more.",
 	}
 
 	root.Version = version

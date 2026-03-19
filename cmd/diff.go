@@ -12,14 +12,14 @@ import (
 
 func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "diff <policy-file>",
-		Aliases: []string{"compare", "cmp"},
-		Short:   "Compare policy actions against two permission boundaries to show what changes",
+		Use:     "pb-diff <policy-file>",
+		Aliases: []string{"diff", "compare", "cmp"},
+		Short:   "Compare policy actions against two permission boundaries",
 		Long: `Loads two permission boundaries (--pb and --pb-new) and reports which Allow actions
 in the given policy would gain or lose access when switching from the old to the new boundary.`,
 		Args: cobra.ExactArgs(1),
-		Example: `  iamctl diff --pb old-boundary.json --pb-new new-boundary.json policy.json
-  iamctl diff --pb old-boundary.json --pb-new new-boundary.json --output json policy.json`,
+		Example: `  iamctl pb-diff --pb old-boundary.json --pb-new new-boundary.json policy.json
+  iamctl pb-diff --pb old-boundary.json --pb-new new-boundary.json --output json policy.json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			pbNewFile, _ := cmd.Flags().GetString("pb-new")
@@ -27,7 +27,7 @@ in the given policy would gain or lose access when switching from the old to the
 			policyFile := args[0]
 
 			if pbNewFile == "" {
-				return fmt.Errorf("--pb-new is required for the diff subcommand")
+				return fmt.Errorf("--pb-new is required for the pb-diff subcommand")
 			}
 
 			data, err := policy.ReadFromPathOrStdin(policyFile)

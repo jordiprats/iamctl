@@ -1,20 +1,20 @@
-# iamctl — AWS IAM Swiss Army Knife
+# iamctl — IAM Inspection and Permission-Boundary Analysis
 
-A command-line tool for validating **AWS IAM actions** against **permission boundary policies**, generating least-privilege policies from actual role usage, and more.
+A command-line tool for inspecting **AWS IAM roles and policies**, validating access against **permission boundary policies**, generating least-privilege policies from actual role usage, and more.
 
 ## Overview
 
 This tool allows you to:
 
-1. **Single Action Check** (`check-action`): Verify if one or more AWS actions are allowed by your permission boundary.
-2. **Policy Validation** (`check-policy`): Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked.
-3. **Role Check** (`check-role`): Fetch all managed policies attached to an **IAM role** and evaluate them against the permission boundary.
+1. **Permission Boundary Action Check** (`pb-check-action`): Verify if one or more AWS actions are allowed by a permission boundary.
+2. **Permission Boundary Policy Validation** (`pb-check-policy`): Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked by a permission boundary.
+3. **Permission Boundary Role Check** (`pb-check-role`): Fetch all managed policies attached to an **IAM role** and evaluate them against a permission boundary.
 4. **Describe Role** (`describe-role`): Show role summary details, switch role link, managed policies, and inline policy JSON.
 5. **Describe Policy** (`describe-policy`): Show managed policy metadata and its JSON document.
 6. **Role List** (`role-list`): List IAM roles whose name contains a given string, with optional last-activity filtering.
 7. **Policy List** (`policy-list`): List IAM managed policies whose name contains a given string, with optional description filters.
-8. **CloudFormation Check** (`check-cf`): Analyze IAM roles and policies from a **CloudFormation template** against the permission boundary.
-9. **Diff** (`diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
+8. **Permission Boundary CloudFormation Check** (`pb-check-cf`): Analyze IAM roles and policies from a **CloudFormation template** against a permission boundary.
+9. **Permission Boundary Diff** (`pb-diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
 10. **Policy from Role Usage** (`policy-from-role-usage`): Generate a least-privilege policy based on a role's actual usage (service last accessed data).
 11. **Shrink Role Policies** (`shrink-role-policies`): Take a role's existing attached policies and remove unused actions based on actual usage.
 
@@ -38,12 +38,12 @@ go run . <command> [options]
 
 ### Commands
 
-#### `check-action` — Check Actions
+#### `pb-check-action` — Check Actions Against a Permission Boundary
 
 Verify if one or more AWS actions are allowed by your permission boundary.
 
 ```bash
-iamctl check-action --pb <boundary-file> <action> [action...]
+iamctl pb-check-action --pb <boundary-file> <action> [action...]
 ```
 
 **Options:**
@@ -53,13 +53,13 @@ iamctl check-action --pb <boundary-file> <action> [action...]
 
 ```bash
 # Check if ec2:RunInstances is allowed
-iamctl check-action --pb pb.json ec2:RunInstances
+iamctl pb-check-action --pb pb.json ec2:RunInstances
 
 # Check multiple actions at once
-iamctl check-action --pb pb.json s3:PutObject s3:GetObject ec2:DescribeInstances
+iamctl pb-check-action --pb pb.json s3:PutObject s3:GetObject ec2:DescribeInstances
 
 # Read boundary from stdin
-aws iam get-policy-version ... | iamctl check-action --pb - ec2:RunInstances
+aws iam get-policy-version ... | iamctl pb-check-action --pb - ec2:RunInstances
 ```
 
 **Exit Codes:**
@@ -68,12 +68,12 @@ aws iam get-policy-version ... | iamctl check-action --pb - ec2:RunInstances
 
 ---
 
-#### `check-policy` — Validate IAM Policy
+#### `pb-check-policy` — Validate IAM Policy Against a Permission Boundary
 
 Analyze all actions in a local policy file and/or AWS managed policies, and determine which are allowed or blocked by the permission boundary.
 
 ```bash
-iamctl check-policy --pb <boundary-file> [policy-file] [options]
+iamctl pb-check-policy --pb <boundary-file> [policy-file] [options]
 ```
 
 At least one of a local policy file or `--managed-policy` must be specified. When both are provided, actions from all sources are merged.
@@ -88,29 +88,29 @@ At least one of a local policy file or `--managed-policy` must be specified. Whe
 
 ```bash
 # Analyze a local policy file
-iamctl check-policy --pb pb.json policy.json
+iamctl pb-check-policy --pb pb.json policy.json
 
 # JSON output for programmatic use
-iamctl check-policy --pb pb.json --output json policy.json
+iamctl pb-check-policy --pb pb.json --output json policy.json
 
 # Table format for easy reading
-iamctl check-policy --pb pb.json --output table policy.json
+iamctl pb-check-policy --pb pb.json --output table policy.json
 
 # Check an AWS managed policy by ARN
-iamctl check-policy --pb pb.json --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
+iamctl pb-check-policy --pb pb.json --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess
 
 # Combine multiple managed policies
-iamctl check-policy --pb pb.json \
+iamctl pb-check-policy --pb pb.json \
   --managed-policy arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess \
   --managed-policy arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
 
 # Combine a local file with managed policies
-iamctl check-policy --pb pb.json \
+iamctl pb-check-policy --pb pb.json \
   --managed-policy arn:aws:iam::aws:policy/ReadOnlyAccess \
   custom-policy.json
 
 # Read policy from stdin
-cat policy.json | iamctl check-policy --pb pb.json -
+cat policy.json | iamctl pb-check-policy --pb pb.json -
 ```
 
 **Exit Codes:**
@@ -119,12 +119,12 @@ cat policy.json | iamctl check-policy --pb pb.json -
 
 ---
 
-#### `check-role` — Check an IAM Role
+#### `pb-check-role` — Check an IAM Role Against a Permission Boundary
 
 Fetch all managed policies attached to an IAM role and evaluate them against the permission boundary. If `--pb` is omitted, the tool automatically fetches the role's own permission boundary from AWS.
 
 ```bash
-iamctl check-role [options] <role-name>
+iamctl pb-check-role [options] <role-name>
 ```
 
 **Options:**
@@ -136,13 +136,13 @@ iamctl check-role [options] <role-name>
 
 ```bash
 # Check a role (auto-fetches its permission boundary)
-iamctl check-role my-role
+iamctl pb-check-role my-role
 
 # Use a specific boundary file instead
-iamctl check-role --pb boundary.json my-role
+iamctl pb-check-role --pb boundary.json my-role
 
 # JSON output with a specific AWS profile
-iamctl check-role --profile staging --output json my-role
+iamctl pb-check-role --profile staging --output json my-role
 ```
 
 **Exit Codes:**
@@ -270,7 +270,7 @@ iamctl policy-list --output json --profile staging ops
 
 ---
 
-#### `check-cf` — Check a CloudFormation Template
+#### `pb-check-cf` — Check a CloudFormation Template Against a Permission Boundary
 
 Parse a CloudFormation template, extract IAM roles and standalone IAM policies, fetch their managed policies from AWS, and evaluate all actions against the permission boundary.
 
@@ -288,7 +288,7 @@ For standalone policies (`AWS::IAM::Policy`, `AWS::IAM::ManagedPolicy`), `--pb` 
 CloudFormation intrinsic functions (`Ref`, `Fn::Join`, etc.) in ARN values cannot be resolved without stack parameters and are silently skipped.
 
 ```bash
-iamctl check-cf [options] <template-file>
+iamctl pb-check-cf [options] <template-file>
 ```
 
 **Options:**
@@ -301,19 +301,19 @@ iamctl check-cf [options] <template-file>
 
 ```bash
 # Check all IAM roles and policies in a CloudFormation template
-iamctl check-cf template.yaml
+iamctl pb-check-cf template.yaml
 
 # Override the permission boundary with a local file
-iamctl check-cf --pb boundary.json template.yaml
+iamctl pb-check-cf --pb boundary.json template.yaml
 
 # Check a specific role resource by logical ID
-iamctl check-cf --resource LambdaRole template.yaml
+iamctl pb-check-cf --resource LambdaRole template.yaml
 
 # Check a standalone policy resource
-iamctl check-cf --pb boundary.json --resource MyManagedPolicy template.yaml
+iamctl pb-check-cf --pb boundary.json --resource MyManagedPolicy template.yaml
 
 # Use a specific AWS profile and JSON output
-iamctl check-cf --profile staging --output json template.yaml
+iamctl pb-check-cf --profile staging --output json template.yaml
 ```
 
 **What gets analyzed:**
@@ -327,12 +327,12 @@ iamctl check-cf --profile staging --output json template.yaml
 
 ---
 
-#### `diff` — Compare Permission Boundaries
+#### `pb-diff` — Compare Permission Boundaries
 
 Compare a policy's actions against two permission boundaries to see what access would be gained or lost when switching from one boundary to another.
 
 ```bash
-iamctl diff --pb <old-boundary> --pb-new <new-boundary> <policy-file>
+iamctl pb-diff --pb <old-boundary> --pb-new <new-boundary> <policy-file>
 ```
 
 **Options:**
@@ -344,10 +344,10 @@ iamctl diff --pb <old-boundary> --pb-new <new-boundary> <policy-file>
 
 ```bash
 # Compare boundaries and see what changes
-iamctl diff --pb old-pb.json --pb-new new-pb.json policy.json
+iamctl pb-diff --pb old-pb.json --pb-new new-pb.json policy.json
 
 # JSON output for CI integration
-iamctl diff --pb old-pb.json --pb-new new-pb.json --output json policy.json
+iamctl pb-diff --pb old-pb.json --pb-new new-pb.json --output json policy.json
 ```
 
 **Exit Codes:**

@@ -16,9 +16,9 @@ import (
 
 func newCheckCfCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "check-cf <template-file>",
-		Aliases: []string{"check-cloudformation", "ccf"},
-		Short:   "Parse a CloudFormation template and check IAM roles and policies against the permission boundary",
+		Use:     "pb-check-cf <template-file>",
+		Aliases: []string{"check-cf", "check-cloudformation", "ccf"},
+		Short:   "Check CloudFormation IAM resources against a permission boundary",
 		Long: `Parse a CloudFormation template, extract IAM roles and standalone IAM policies,
 fetch managed policies from AWS, and evaluate all actions against the permission boundary.
 
@@ -39,11 +39,11 @@ Intrinsic functions (Fn::Join, Ref, Fn::Sub) in ARN values are resolved
 automatically using STS GetCallerIdentity for the AWS account ID.
 Inline policies from the Policies property are parsed directly.`,
 		Args: cobra.ExactArgs(1),
-		Example: `  iamctl check-cf template.yaml
-  iamctl check-cf --pb boundary.json template.yaml
-  iamctl check-cf --resource LambdaRole template.yaml
-  iamctl check-cf --profile staging --output json template.yaml
-  iamctl check-cf --pb boundary.json --resource MyPolicy template.yaml`,
+		Example: `  iamctl pb-check-cf template.yaml
+	iamctl pb-check-cf --pb boundary.json template.yaml
+	iamctl pb-check-cf --resource LambdaRole template.yaml
+	iamctl pb-check-cf --profile staging --output json template.yaml
+	iamctl pb-check-cf --pb boundary.json --resource MyPolicy template.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, _ := cmd.Flags().GetString("output")
 			profile, _ := cmd.Flags().GetString("profile")

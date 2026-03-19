@@ -24,5 +24,5 @@ iamctl describe-policy <policy-arn> [flags]
 
 ### SEE ALSO
 
-* [iamctl](iamctl.md)	 - AWS IAM Swiss Army Knife
+* [iamctl](iamctl.md)	 - Inspect IAM and analyze permission boundaries
 
