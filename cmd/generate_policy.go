@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
@@ -28,6 +29,8 @@ func newPolicyFromRoleUsageCmd() *cobra.Command {
 			ctx := cmd.Context()
 
 			var opts []func(*config.LoadOptions) error
+			opts = append(opts, config.WithRetryMode(aws.RetryModeAdaptive))
+			opts = append(opts, config.WithRetryMaxAttempts(10))
 			if profile != "" {
 				opts = append(opts, config.WithSharedConfigProfile(profile))
 			}

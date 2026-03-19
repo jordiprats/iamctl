@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -24,6 +25,8 @@ type IAMClient interface {
 // NewIAMClient creates an IAM client using the given profile (or default credentials).
 func NewIAMClient(ctx context.Context, profile string) (IAMClient, error) {
 	var opts []func(*config.LoadOptions) error
+	opts = append(opts, config.WithRetryMode(aws.RetryModeAdaptive))
+	opts = append(opts, config.WithRetryMaxAttempts(10))
 	if profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(profile))
 	}
@@ -38,6 +41,8 @@ func NewIAMClient(ctx context.Context, profile string) (IAMClient, error) {
 // using the current credentials. Returns a map suitable for cfn.ResolveIntrinsic.
 func GetAWSPseudoParams(ctx context.Context, profile string) (map[string]string, error) {
 	var opts []func(*config.LoadOptions) error
+	opts = append(opts, config.WithRetryMode(aws.RetryModeAdaptive))
+	opts = append(opts, config.WithRetryMaxAttempts(10))
 	if profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(profile))
 	}
