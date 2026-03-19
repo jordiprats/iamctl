@@ -393,19 +393,19 @@ func checkCfRole(cmd *cobra.Command, role cfn.IAMRole, format, profile string) (
 		if len(allowedActions) > 0 {
 			fmt.Println("🟢  Allowed actions:")
 			for _, a := range allowedActions {
-				fmt.Printf("    %-58s (from %s)\n", a, mergedAllow[a])
+				fmt.Printf("    %-58s  — %s\n", a, mergedAllow[a])
 			}
 		}
 		if len(blockedActions) > 0 {
 			fmt.Println("\n🔴  Blocked actions (not allowed by permission boundary):")
 			for _, a := range blockedActions {
-				fmt.Printf("    %-58s (from %s)\n", a, mergedAllow[a])
+				fmt.Printf("    %-58s  — %s\n", a, mergedAllow[a])
 			}
 		}
 		if len(denyActions) > 0 {
 			fmt.Println("\n🟡  Skipped actions (explicitly denied by policy):")
 			for _, a := range denyActions {
-				fmt.Printf("    %-58s (from %s)\n", a, mergedDeny[a])
+				fmt.Printf("    %-58s  — %s\n", a, mergedDeny[a])
 			}
 		}
 		if len(notActionSummaries) > 0 {
