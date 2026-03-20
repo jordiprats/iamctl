@@ -7,8 +7,9 @@ Compare policy actions against two permission boundaries
 Loads two permission boundaries (--pb and --pb-new) and reports which Allow actions
 would gain or lose access when switching from the old to the new boundary.
 
-Actions can come from a local policy file (positional argument or stdin via '-')
-or be fetched live from AWS by specifying an IAM role with --role.
+Policy source — specify exactly one:
+  <policy-file>   Local JSON policy file, or '-' to read from stdin
+  --role <name>   Fetch the role's attached managed policies from AWS
 
 ```
 iamctl pb-diff [policy-file] [flags]
