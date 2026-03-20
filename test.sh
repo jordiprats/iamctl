@@ -392,6 +392,30 @@ grep -q "lost\|No longer allowed" "$TMPDIR_TEST/diff_list.txt" \
   && fail "Should error when --pb-new is missing" \
   || pass "Correctly errors when --pb-new is missing"
 
+# --role and policy file argument are mutually exclusive
+"$BINARY" diff \
+  --pb "$TESTDATA/test-diff-old-pb.json" \
+  --pb-new "$TESTDATA/test-diff-new-pb.json" \
+  --role my-role \
+  "$TESTDATA/test-diff-policy.json" 2>"$TMPDIR_TEST/diff_exclusive_err.txt" \
+  && fail "diff should error when --role and policy file are both specified" \
+  || pass "diff correctly errors when --role and policy file are both specified"
+
+grep -qi "mutually exclusive\|cannot" "$TMPDIR_TEST/diff_exclusive_err.txt" \
+  && pass "Error message mentions mutual exclusivity" \
+  || fail "Error should mention --role and file are mutually exclusive"
+
+# No policy source at all → error
+"$BINARY" diff \
+  --pb "$TESTDATA/test-diff-old-pb.json" \
+  --pb-new "$TESTDATA/test-diff-new-pb.json" 2>"$TMPDIR_TEST/diff_no_source_err.txt" \
+  && fail "diff should error when neither --role nor policy file is given" \
+  || pass "diff correctly errors when no policy source is specified"
+
+grep -qi "policy file\|--role\|must be specified" "$TMPDIR_TEST/diff_no_source_err.txt" \
+  && pass "Error message mentions --role or policy file requirement" \
+  || fail "Error should mention needing --role or a policy file"
+
 # -----------------------------------------------------------------------
 # --version flag
 # -----------------------------------------------------------------------

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
+	"github.com/jordiprats/iamctl/pkg/awsiam"
 	"github.com/jordiprats/iamctl/pkg/boundary"
 	"github.com/jordiprats/iamctl/pkg/policy"
 	"github.com/spf13/cobra"
@@ -12,44 +14,84 @@ import (
 
 func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "pb-diff <policy-file>",
+		Use:     "pb-diff [policy-file]",
 		Aliases: []string{"diff", "compare", "cmp"},
 		Short:   "Compare policy actions against two permission boundaries",
 		Long: `Loads two permission boundaries (--pb and --pb-new) and reports which Allow actions
-in the given policy would gain or lose access when switching from the old to the new boundary.`,
-		Args: cobra.ExactArgs(1),
+would gain or lose access when switching from the old to the new boundary.
+
+Policy source — specify exactly one:
+  <policy-file>   Local JSON policy file, or '-' to read from stdin
+  --role <name>   Fetch the role's attached managed policies from AWS`,
+		Args: cobra.MaximumNArgs(1),
 		Example: `  iamctl pb-diff --pb old-boundary.json --pb-new new-boundary.json policy.json
-  iamctl pb-diff --pb old-boundary.json --pb-new new-boundary.json --output json policy.json`,
+  iamctl pb-diff --pb old-boundary.json --pb-new new-boundary.json --output json policy.json
+  iamctl pb-diff --pb old-boundary.json --pb-new new-boundary.json --role my-role
+  iamctl pb-diff --pb old-boundary.json --pb-new new-boundary.json --role my-role --profile staging`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pbFile, _ := cmd.Flags().GetString("pb")
 			pbNewFile, _ := cmd.Flags().GetString("pb-new")
 			format, _ := cmd.Flags().GetString("output")
-			policyFile := args[0]
+			roleName, _ := cmd.Flags().GetString("role")
+			profile, _ := cmd.Flags().GetString("profile")
 
-			if pbNewFile == "" {
-				return fmt.Errorf("--pb-new is required for the pb-diff subcommand")
+			if roleName == "" && len(args) == 0 {
+				return fmt.Errorf("either a policy file argument or --role must be specified")
 			}
-
-			data, err := policy.ReadFromPathOrStdin(policyFile)
-			if err != nil {
-				return fmt.Errorf("reading policy file: %w", err)
+			if roleName != "" && len(args) > 0 {
+				return fmt.Errorf("--role and a policy file argument are mutually exclusive")
 			}
-
-			var doc policy.PolicyDocument
-			if err := json.Unmarshal(data, &doc); err != nil {
-				return fmt.Errorf("parsing policy JSON: %w", err)
-			}
-
-			extracted := policy.ExtractActions(doc)
 
 			pbOld, err := boundary.LoadFromFile(pbFile)
 			if err != nil {
 				return fmt.Errorf("loading old permission boundary: %w", err)
 			}
-
 			pbNew, err := boundary.LoadFromFile(pbNewFile)
 			if err != nil {
 				return fmt.Errorf("loading new permission boundary: %w", err)
+			}
+
+			var extracted policy.ExtractedActions
+
+			if roleName != "" {
+				iamClient, err := awsiam.NewIAMClient(cmd.Context(), profile)
+				if err != nil {
+					return err
+				}
+				policies, err := awsiam.FetchRolePolicies(cmd.Context(), iamClient, roleName)
+				if err != nil {
+					return fmt.Errorf("fetching role policies: %w", err)
+				}
+				if len(policies) == 0 {
+					fmt.Fprintln(os.Stderr, "No managed policies attached to role")
+					return nil
+				}
+
+				mergedAllow := make(map[string]bool)
+				for _, policyDoc := range policies {
+					ext := policy.ExtractActions(policyDoc)
+					extracted.HasWildcards = extracted.HasWildcards || ext.HasWildcards
+					extracted.HasConditions = extracted.HasConditions || ext.HasConditions
+					extracted.HasNotResources = extracted.HasNotResources || ext.HasNotResources
+					extracted.NotActionStmts = append(extracted.NotActionStmts, ext.NotActionStmts...)
+					for _, a := range ext.AllowActions {
+						mergedAllow[a] = true
+					}
+				}
+				for a := range mergedAllow {
+					extracted.AllowActions = append(extracted.AllowActions, a)
+				}
+				sort.Strings(extracted.AllowActions)
+			} else {
+				data, err := policy.ReadFromPathOrStdin(args[0])
+				if err != nil {
+					return fmt.Errorf("reading policy file: %w", err)
+				}
+				var doc policy.PolicyDocument
+				if err := json.Unmarshal(data, &doc); err != nil {
+					return fmt.Errorf("parsing policy JSON: %w", err)
+				}
+				extracted = policy.ExtractActions(doc)
 			}
 
 			// Classify every Allow action
@@ -94,11 +136,17 @@ in the given policy would gain or lose access when switching from the old to the
 						"unchanged": len(unchanged),
 					},
 				}
+				if roleName != "" {
+					result["role"] = roleName
+				}
 				out, _ := json.MarshalIndent(result, "", "  ")
 				fmt.Println(string(out))
 
 			default: // list
 				warnings := policy.Warnings(extracted, false)
+				if roleName != "" {
+					fmt.Fprintf(os.Stderr, "Role: %s\n\n", roleName)
+				}
 				printWarnings(warnings, os.Stderr)
 				if len(gained) > 0 {
 					fmt.Println("🟢  Newly allowed by new boundary (gained access):")
@@ -126,12 +174,14 @@ in the given policy would gain or lose access when switching from the old to the
 		},
 	}
 
-	cmd.Flags().String("pb", "", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
+	cmd.Flags().String("pb", "", "Path to the old permission boundary file (JSON or text format), or '-' for stdin")
 	_ = cmd.MarkFlagRequired("pb")
 
 	cmd.Flags().String("pb-new", "", "Path to the new permission boundary to compare against (required)")
 	_ = cmd.MarkFlagRequired("pb-new")
 
+	cmd.Flags().String("role", "", "IAM role name to fetch managed policies from AWS (mutually exclusive with policy file argument)")
+	cmd.Flags().String("profile", "", "AWS profile to use when fetching role policies")
 	cmd.Flags().String("output", "list", "Output format: list or json")
 
 	return cmd
