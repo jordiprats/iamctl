@@ -1,6 +1,6 @@
 ## iamctl pb-check-role
 
-Check an IAM role's managed-policy actions against a permission boundary
+Check an IAM role's actions (managed and inline policies) against a permission boundary
 
 ```
 iamctl pb-check-role <role-name> [flags]

@@ -8,7 +8,7 @@ This tool allows you to:
 
 1. **Permission Boundary Action Check** (`pb-check-action`): Verify if one or more AWS actions are allowed by a permission boundary.
 2. **Permission Boundary Policy Validation** (`pb-check-policy`): Analyze all actions in a local policy file or AWS managed policies and identify which are allowed vs blocked by a permission boundary.
-3. **Permission Boundary Role Check** (`pb-check-role`): Fetch all managed policies attached to an **IAM role** and evaluate them against a permission boundary.
+3. **Permission Boundary Role Check** (`pb-check-role`): Fetch all **managed and inline policies** attached to an **IAM role** and evaluate them against a permission boundary.
 4. **Describe Role** (`describe-role`): Show role summary details, switch role link, managed policies, and inline policy JSON.
 5. **Describe Policy** (`describe-policy`): Show managed policy metadata and its JSON document.
 6. **Role List** (`role-list`): List IAM roles whose name contains a given string, with optional last-activity filtering.
@@ -122,7 +122,9 @@ cat policy.json | iamctl pb-check-policy --pb pb.json -
 
 #### `pb-check-role` — Check an IAM Role Against a Permission Boundary
 
-Fetch all managed policies attached to an IAM role and evaluate them against the permission boundary. If `--pb` is omitted, the tool automatically fetches the role's own permission boundary from AWS.
+Fetch all **managed and inline policies** attached to an IAM role and evaluate them against the permission boundary. If `--pb` is omitted, the tool automatically fetches the role's own permission boundary from AWS.
+
+Both managed policies (attached by ARN) and inline policies (embedded in the role) are evaluated. JSON output includes separate `managed_policies` and `inline_policies` lists.
 
 ```bash
 iamctl pb-check-role [options] <role-name>

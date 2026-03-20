@@ -644,6 +644,10 @@ echo "=== merge-role-policies command ==="
   && pass "mrp alias works" \
   || fail "mrp alias not registered"
 
+"$BINARY" merge-policies --help > /dev/null 2>&1 \
+  && pass "merge-policies alias works" \
+  || fail "merge-policies alias not registered"
+
 # -----------------------------------------------------------------------
 # pb-check-cf — local inline-only templates (no AWS required)
 # -----------------------------------------------------------------------
@@ -752,6 +756,24 @@ grep -qi "pb\|permission boundary" "$TMPDIR_TEST/cf_no_pb.txt" \
   && pass "Error message mentions --pb requirement" \
   || fail "Error message should mention --pb"
 
+# List output format (default — no --output flag)
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --resource MyManagedPolicy \
+  "$TESTDATA/test-cf-policies.yaml" > "$TMPDIR_TEST/cf_list_out.txt" 2>/dev/null || true
+
+grep -qi "blocked\|not allowed" "$TMPDIR_TEST/cf_list_out.txt" \
+  && pass "pb-check-cf list output mentions blocked actions" \
+  || fail "pb-check-cf list output should mention blocked actions"
+
+grep -q "s3:PutObject" "$TMPDIR_TEST/cf_list_out.txt" \
+  && pass "pb-check-cf list output shows blocked action s3:PutObject" \
+  || fail "pb-check-cf list output should show s3:PutObject"
+
+grep -q "s3:GetObject\|s3:ListBucket" "$TMPDIR_TEST/cf_list_out.txt" \
+  && pass "pb-check-cf list output shows allowed actions" \
+  || fail "pb-check-cf list output should show allowed actions"
+
 # Aliases
 "$BINARY" check-cf --help > /dev/null 2>&1 \
   && pass "check-cf alias works" \
@@ -760,6 +782,29 @@ grep -qi "pb\|permission boundary" "$TMPDIR_TEST/cf_no_pb.txt" \
 "$BINARY" ccf --help > /dev/null 2>&1 \
   && pass "ccf alias works" \
   || fail "ccf alias not registered"
+
+"$BINARY" check-cloudformation --help > /dev/null 2>&1 \
+  && pass "check-cloudformation alias works" \
+  || fail "check-cloudformation alias not registered"
+
+# pb-diff aliases (compare / cmp)
+"$BINARY" compare --help > /dev/null 2>&1 \
+  && pass "compare alias works (pb-diff)" \
+  || fail "compare alias not registered"
+
+"$BINARY" cmp --help > /dev/null 2>&1 \
+  && pass "cmp alias works (pb-diff)" \
+  || fail "cmp alias not registered"
+
+# pb-check-action ca alias
+"$BINARY" ca --help > /dev/null 2>&1 \
+  && pass "ca alias works (pb-check-action)" \
+  || fail "ca alias not registered"
+
+# pb-check-policy cp alias
+"$BINARY" cp --help > /dev/null 2>&1 \
+  && pass "cp alias works (pb-check-policy)" \
+  || fail "cp alias not registered"
 
 # -----------------------------------------------------------------------
 # gendocs
@@ -789,12 +834,12 @@ echo ""
 echo "=== AWS-requiring commands (--help smoke tests) ==="
 
 for cmd_alias in "shrink-role-policies srp shrink" \
-                 "role-list rl search-roles" \
-                 "policy-list pl search-policies" \
+                 "role-list rl lr search-roles sr" \
+                 "policy-list pl lp search-policies sp" \
                  "describe-role dr" \
                  "describe-policy dp" \
                  "pb-check-role check-role cr" \
-                 "policy-from-role-usage pfu activity-policy"; do
+                 "policy-from-role-usage pfu activity-policy policy-from-usage"; do
   primary=$(echo "$cmd_alias" | awk '{print $1}')
   "$BINARY" "$primary" --help > /dev/null 2>&1 \
     && pass "$primary is registered (--help works)" \
