@@ -35,6 +35,7 @@ iamctl pb-check-cf <template-file> [flags]
 	iamctl pb-check-cf --pb boundary.json template.yaml
 	iamctl pb-check-cf --resource LambdaRole template.yaml
 	iamctl pb-check-cf --profile staging --output json template.yaml
+	iamctl pb-check-cf --pb boundary.json --output sarif template.yaml > results.sarif
 	iamctl pb-check-cf --pb boundary.json --resource MyPolicy template.yaml
 ```
 
@@ -42,7 +43,7 @@ iamctl pb-check-cf <template-file> [flags]
 
 ```
   -h, --help              help for pb-check-cf
-      --output string     Output format: list or json (default "list")
+      --output string     Output format: list, json, or sarif (default "list")
       --pb string         Path to the permission boundary file (if omitted, resolves from template)
       --profile string    AWS profile to use
       --resource string   Logical ID of a specific IAM resource to check (role or policy)

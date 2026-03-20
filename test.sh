@@ -417,6 +417,91 @@ grep -qi "policy file\|--role\|must be specified" "$TMPDIR_TEST/diff_no_source_e
   || fail "Error should mention needing --role or a policy file"
 
 # -----------------------------------------------------------------------
+# pb-check-cf SARIF output
+# -----------------------------------------------------------------------
+echo ""
+echo "=== pb-check-cf SARIF output ==="
+
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output sarif \
+  "$TESTDATA/test-cf-policies.yaml" > "$TMPDIR_TEST/cf_sarif.json" 2>/dev/null || true
+
+# Must be valid JSON
+python3 -m json.tool "$TMPDIR_TEST/cf_sarif.json" > /dev/null 2>&1 \
+  && pass "SARIF output is valid JSON" \
+  || fail "SARIF output is not valid JSON"
+
+# SARIF version field
+jq -e '.version == "2.1.0"' "$TMPDIR_TEST/cf_sarif.json" > /dev/null \
+  && pass "SARIF version is 2.1.0" \
+  || fail "SARIF version field wrong"
+
+# Tool driver name
+jq -e '.runs[0].tool.driver.name == "iamctl"' "$TMPDIR_TEST/cf_sarif.json" > /dev/null \
+  && pass "SARIF tool driver name is iamctl" \
+  || fail "SARIF tool driver name wrong"
+
+# Rules defined
+jq -e '[.runs[0].tool.driver.rules[].id] | contains(["PB001","PB002","PB003"])' "$TMPDIR_TEST/cf_sarif.json" > /dev/null \
+  && pass "SARIF rules PB001/PB002/PB003 defined" \
+  || fail "SARIF rules missing"
+
+# Template file appears as artifact
+SARIF_URI=$(jq -r '.runs[0].artifacts[0].location.uri' "$TMPDIR_TEST/cf_sarif.json")
+if [[ "$SARIF_URI" == *"test-cf-policies.yaml" ]]; then
+  pass "SARIF artifact URI contains template filename"
+else
+  fail "SARIF artifact URI wrong: $SARIF_URI"
+fi
+
+# Two error-level results (s3:PutObject and logs:CreateLogGroup are blocked)
+ERROR_COUNT=$(jq '[.runs[0].results[] | select(.level=="error")] | length' "$TMPDIR_TEST/cf_sarif.json")
+if [ "$ERROR_COUNT" -eq 2 ]; then
+  pass "SARIF has 2 error-level results for blocked actions"
+else
+  fail "Expected 2 SARIF errors, got $ERROR_COUNT"
+fi
+
+# Blocked action names appear in result messages
+jq -r '.runs[0].results[].message.text' "$TMPDIR_TEST/cf_sarif.json" | grep -q "s3:PutObject" \
+  && pass "SARIF result mentions s3:PutObject" \
+  || fail "SARIF result missing s3:PutObject"
+
+jq -r '.runs[0].results[].message.text' "$TMPDIR_TEST/cf_sarif.json" | grep -q "logs:CreateLogGroup" \
+  && pass "SARIF result mentions logs:CreateLogGroup" \
+  || fail "SARIF result missing logs:CreateLogGroup"
+
+# Each result has a logicalLocation pointing to the CF resource
+jq -e '.runs[0].results[0].locations[0].logicalLocations[0].name != null' "$TMPDIR_TEST/cf_sarif.json" > /dev/null \
+  && pass "SARIF results have logicalLocations" \
+  || fail "SARIF results missing logicalLocations"
+
+# Line numbers present (yaml.Node provides line info)
+jq -e '.runs[0].results[0].locations[0].physicalLocation.region.startLine > 0' "$TMPDIR_TEST/cf_sarif.json" > /dev/null \
+  && pass "SARIF results include startLine from YAML" \
+  || fail "SARIF results missing startLine"
+
+# Exit code 1 when blocked actions present
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output sarif \
+  "$TESTDATA/test-cf-policies.yaml" > /dev/null 2>/dev/null \
+  && fail "pb-check-cf --output sarif should exit non-zero when blocked" \
+  || pass "pb-check-cf --output sarif exits non-zero when blocked"
+
+# Clean template (AnotherRole, all actions allowed) → no error results
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output sarif \
+  --resource AnotherRole \
+  "$TESTDATA/test-cf-template.yaml" > "$TMPDIR_TEST/cf_sarif_clean.json" 2>/dev/null || true
+
+jq -e '[.runs[0].results[] | select(.level=="error")] | length == 0' "$TMPDIR_TEST/cf_sarif_clean.json" > /dev/null \
+  && pass "SARIF has 0 errors for fully-allowed resource" \
+  || fail "SARIF should have 0 errors when all actions are allowed"
+
+# -----------------------------------------------------------------------
 # --version flag
 # -----------------------------------------------------------------------
 echo ""

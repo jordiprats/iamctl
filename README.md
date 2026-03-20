@@ -17,6 +17,7 @@ This tool allows you to:
 9. **Permission Boundary Diff** (`pb-diff`): Compare a policy against two permission boundaries to see what access would be gained or lost.
 10. **Policy from Role Usage** (`policy-from-role-usage`): Generate a least-privilege policy based on a role's actual usage (service last accessed data).
 11. **Shrink Role Policies** (`shrink-role-policies`): Take a role's existing attached policies and remove unused actions based on actual usage.
+12. **Merge Role Policies** (`merge-role-policies`): Fetch all managed policies attached to a role and merge them into a single unified policy JSON.
 
 ## Installation
 
@@ -293,7 +294,7 @@ iamctl pb-check-cf [options] <template-file>
 
 **Options:**
 - `--pb <file>`: Path to permission boundary file (if omitted, resolves from the template's `PermissionsBoundary` property; **required** for standalone policies)
-- `--output <format>`: Output format — `list` or `json` (default: `list`)
+- `--output <format>`: Output format — `list`, `json`, or `sarif` (default: `list`)
 - `--profile <name>`: AWS profile to use
 - `--resource <logical-id>`: Check only a specific IAM resource by its logical ID (role or policy)
 
@@ -314,12 +315,31 @@ iamctl pb-check-cf --pb boundary.json --resource MyManagedPolicy template.yaml
 
 # Use a specific AWS profile and JSON output
 iamctl pb-check-cf --profile staging --output json template.yaml
+
+# SARIF output for GitHub Code Scanning / VS Code Problems panel
+iamctl pb-check-cf --pb boundary.json --output sarif template.yaml > results.sarif
 ```
 
 **What gets analyzed:**
 - **IAM Roles**: Managed policy ARNs are fetched from AWS; inline policies are parsed from YAML
 - **Standalone policies** (`AWS::IAM::Policy`, `AWS::IAM::ManagedPolicy`): `PolicyDocument` is parsed directly from YAML
-- **Intrinsic function ARNs**: Skipped (e.g. `Fn::Join`, `Ref` in ARN values)
+- **Intrinsic function ARNs**: `Fn::Join`, `Ref`, `Fn::Sub` are resolved automatically using STS `GetCallerIdentity`
+
+**SARIF output** (`--output sarif`) produces a [SARIF 2.1.0](https://sarifweb.azurewebsites.net/) document with one result per blocked action. Upload to GitHub Code Scanning to get inline PR annotations:
+
+```yaml
+- run: iamctl pb-check-cf --pb boundary.json --output sarif template.yaml > results.sarif || true
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
+SARIF rules emitted:
+| Rule | Level | Meaning |
+|------|-------|---------|
+| `PB001` | `error` | Action blocked by permission boundary |
+| `PB002` | `warning` | Resource has wildcard actions requiring manual review |
+| `PB003` | `warning` | Resource has a `NotAction` statement requiring manual review |
 
 **Exit Codes:**
 - `0`: All actions in all resources are allowed
@@ -331,20 +351,30 @@ iamctl pb-check-cf --profile staging --output json template.yaml
 
 Compare a policy's actions against two permission boundaries to see what access would be gained or lost when switching from one boundary to another.
 
+Policy source — specify exactly one:
+- A local JSON policy file (positional argument, or `-` for stdin)
+- `--role <name>` to fetch the role's attached managed policies live from AWS
+
 ```bash
-iamctl pb-diff --pb <old-boundary> --pb-new <new-boundary> <policy-file>
+iamctl pb-diff --pb <old-boundary> --pb-new <new-boundary> [policy-file]
+iamctl pb-diff --pb <old-boundary> --pb-new <new-boundary> --role <role-name>
 ```
 
 **Options:**
 - `--pb <file>` **(required)**: Path to the old (current) permission boundary file
 - `--pb-new <file>` **(required)**: Path to the new permission boundary to compare against
+- `--role <name>`: IAM role name — fetch its managed policies from AWS instead of using a local file
+- `--profile <name>`: AWS profile to use when `--role` is specified
 - `--output <format>`: Output format — `list` or `json` (default: `list`)
 
 **Examples:**
 
 ```bash
-# Compare boundaries and see what changes
+# Compare boundaries against a local policy file
 iamctl pb-diff --pb old-pb.json --pb-new new-pb.json policy.json
+
+# Compare boundaries against a live IAM role's attached policies
+iamctl pb-diff --pb old-pb.json --pb-new new-pb.json --role my-role
 
 # JSON output for CI integration
 iamctl pb-diff --pb old-pb.json --pb-new new-pb.json --output json policy.json
@@ -420,6 +450,51 @@ iamctl shrink-role-policies --ignore-deny my-role
 # Expand wildcards to exact observed actions and deduplicate equivalent statements while preserving targeted resources
 iamctl shrink-role-policies --strict my-role
 ```
+
+---
+
+#### `merge-role-policies` — Merge a Role's Policies
+
+Fetch all managed policies attached to a role and merge them into a single unified policy JSON. Useful for inspecting the combined effective policy or as input to other tools.
+
+Deny statements, NotAction statements, and Conditions are preserved as-is by default.
+Use `--strict` to deduplicate and normalize equivalent statements.
+
+```bash
+iamctl merge-role-policies [options] <role-name>
+```
+
+**Options:**
+- `--profile <name>`: AWS profile to use
+- `-q, --quiet`: Suppress informational output, print only the policy JSON (useful for scripts)
+- `--ignore-deny`: Omit Deny statements from the output policy
+- `--strict`: Compact equivalent statements by normalizing and merging actions with identical Effect/Resource/Condition
+
+**Examples:**
+
+```bash
+# Merge all managed policies for a role
+iamctl merge-role-policies my-role
+
+# Use a specific AWS profile
+iamctl merge-role-policies --profile staging my-role
+
+# Quiet mode for piping into a file or another command
+iamctl merge-role-policies -q my-role > merged-policy.json
+
+# Omit Deny statements
+iamctl merge-role-policies --ignore-deny my-role
+
+# Compact and deduplicate equivalent statements
+iamctl merge-role-policies --strict my-role
+
+# Use the merged output as input to pb-check-policy
+iamctl merge-role-policies -q my-role | iamctl pb-check-policy --pb boundary.json -
+```
+
+**Exit Codes:**
+- `0`: Merged policy successfully printed
+- `1`: Error (role not found, no policies attached, AWS error)
 
 ## Permission Boundary Format
 

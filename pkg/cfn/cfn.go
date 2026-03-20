@@ -33,6 +33,7 @@ type IAMRoleProperties struct {
 // IAMRole is a named IAM role extracted from a CloudFormation template.
 type IAMRole struct {
 	LogicalID  string
+	Line       int // approximate YAML line number of the resource's Properties node
 	Properties IAMRoleProperties
 }
 
@@ -40,6 +41,7 @@ type IAMRole struct {
 type IAMPolicyResource struct {
 	LogicalID      string
 	Type           string // "AWS::IAM::Policy" or "AWS::IAM::ManagedPolicy"
+	Line           int    // approximate YAML line number of the resource's Properties node
 	PolicyDocument policy.PolicyDocument
 }
 
@@ -72,6 +74,7 @@ func ExtractIAMRoles(tmpl *Template) ([]IAMRole, error) {
 
 		roles = append(roles, IAMRole{
 			LogicalID:  logicalID,
+			Line:       res.Properties.Line,
 			Properties: *props,
 		})
 	}
@@ -182,6 +185,7 @@ func ExtractIAMPolicies(tmpl *Template) ([]IAMPolicyResource, error) {
 		policies = append(policies, IAMPolicyResource{
 			LogicalID:      logicalID,
 			Type:           res.Type,
+			Line:           res.Properties.Line,
 			PolicyDocument: *doc,
 		})
 	}
