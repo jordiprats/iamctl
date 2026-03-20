@@ -100,7 +100,12 @@ func parseRoleProperties(node *yaml.Node) (*IAMRoleProperties, error) {
 		if arnList, ok := arns.([]interface{}); ok {
 			for _, v := range arnList {
 				if s, ok := v.(string); ok {
-					props.ManagedPolicyArns = append(props.ManagedPolicyArns, s)
+					if strings.Contains(s, "${") {
+						// !Sub or bare ${...} substitution string — route through Fn::Sub resolution
+						props.ManagedPolicyArnsRaw = append(props.ManagedPolicyArnsRaw, map[string]interface{}{"Fn::Sub": s})
+					} else {
+						props.ManagedPolicyArns = append(props.ManagedPolicyArns, s)
+					}
 				} else {
 					// Store intrinsic function entries for later resolution
 					props.ManagedPolicyArnsRaw = append(props.ManagedPolicyArnsRaw, v)
@@ -112,7 +117,12 @@ func parseRoleProperties(node *yaml.Node) (*IAMRoleProperties, error) {
 	// Extract PermissionsBoundary
 	if pb, ok := raw["PermissionsBoundary"]; ok {
 		if s, ok := pb.(string); ok {
-			props.PermissionBoundary = s
+			if strings.Contains(s, "${") {
+				// !Sub or bare ${...} substitution string — route through Fn::Sub resolution
+				props.PermissionBoundaryRaw = map[string]interface{}{"Fn::Sub": s}
+			} else {
+				props.PermissionBoundary = s
+			}
 		} else {
 			// Store raw intrinsic function value for later resolution
 			props.PermissionBoundaryRaw = pb
