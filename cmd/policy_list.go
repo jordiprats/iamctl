@@ -13,7 +13,7 @@ import (
 func newPolicyListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "policy-list <query>",
-		Aliases: []string{"pl", "search-policies", "sp"},
+		Aliases: []string{"pl", "lp", "search-policies", "sp"},
 		Short:   "List IAM managed policies whose names contain a string",
 		Args:    cobra.ExactArgs(1),
 		Example: `  iamctl policy-list read

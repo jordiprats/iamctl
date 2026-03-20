@@ -13,7 +13,7 @@ import (
 func newRoleListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "role-list <query>",
-		Aliases: []string{"rl", "search-roles", "sr"},
+		Aliases: []string{"rl", "lr", "search-roles", "sr"},
 		Short:   "List IAM roles whose names contain a string",
 		Args:    cobra.ExactArgs(1),
 		Example: `  iamctl role-list app
