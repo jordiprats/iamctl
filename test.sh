@@ -536,6 +536,168 @@ echo "=== merge-role-policies command ==="
   || fail "mrp alias not registered"
 
 # -----------------------------------------------------------------------
+# pb-check-cf — local inline-only templates (no AWS required)
+# -----------------------------------------------------------------------
+echo ""
+echo "=== pb-check-cf — standalone IAM policy resources ==="
+
+# test-cf-policies.yaml has AWS::IAM::ManagedPolicy and AWS::IAM::Policy
+# with purely inline PolicyDocuments — no ManagedPolicyArns → no AWS needed.
+# test-pb.json: Allow:* + Deny+NotAction[ec2:Describe*, s3:Get*, s3:List*, iam:Get*, iam:List*]
+# MyManagedPolicy: s3:GetObject ✅ s3:ListBucket ✅ s3:PutObject ❌ s3:DeleteBucket→skipped
+# MyInlinePolicy: ec2:DescribeInstances ✅ ec2:DescribeSecurityGroups ✅ logs:CreateLogGroup ❌
+
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output json \
+  "$TESTDATA/test-cf-policies.yaml" > "$TMPDIR_TEST/cf_policies.json" || true
+
+# Two separate JSON blobs separated by "===..." — both resources should appear
+grep -q '"MyManagedPolicy"' "$TMPDIR_TEST/cf_policies.json" \
+  && grep -q '"MyInlinePolicy"' "$TMPDIR_TEST/cf_policies.json" \
+  && pass "pb-check-cf produced output for both policy resources" \
+  || fail "pb-check-cf should produce output for 2 policy resources"
+
+# Test each resource individually for precise count assertions
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output json \
+  --resource MyManagedPolicy \
+  "$TESTDATA/test-cf-policies.yaml" > "$TMPDIR_TEST/cf_managed_policy.json" 2>/dev/null || true
+
+jq -e '.resource == "MyManagedPolicy" and .summary.allowed == 2 and .summary.blocked == 1 and .summary.skipped_deny == 1' \
+  "$TMPDIR_TEST/cf_managed_policy.json" > /dev/null \
+  && pass "MyManagedPolicy: allowed=2 blocked=1 skipped_deny=1" \
+  || fail "MyManagedPolicy counts wrong"
+
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output json \
+  --resource MyInlinePolicy \
+  "$TESTDATA/test-cf-policies.yaml" > "$TMPDIR_TEST/cf_inline_policy.json" 2>/dev/null || true
+
+jq -e '.resource == "MyInlinePolicy" and .summary.allowed == 2 and .summary.blocked == 1' \
+  "$TMPDIR_TEST/cf_inline_policy.json" > /dev/null \
+  && pass "MyInlinePolicy: allowed=2 blocked=1" \
+  || fail "MyInlinePolicy counts wrong"
+
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  "$TESTDATA/test-cf-policies.yaml" \
+  && fail "pb-check-cf should exit non-zero when actions are blocked" \
+  || pass "pb-check-cf correctly exits non-zero when actions are blocked"
+
+# --resource filter for a standalone policy resource
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output json \
+  --resource MyInlinePolicy \
+  "$TESTDATA/test-cf-policies.yaml" > "$TMPDIR_TEST/cf_resource_filter.json" 2>/dev/null || true
+
+jq -e 'type == "object"' "$TMPDIR_TEST/cf_resource_filter.json" > /dev/null \
+  && pass "--resource filter returns a single JSON object" \
+  || fail "--resource filter should return exactly 1 result"
+
+jq -e '.resource == "MyInlinePolicy"' "$TMPDIR_TEST/cf_resource_filter.json" > /dev/null \
+  && pass "--resource filter returned the correct resource (MyInlinePolicy)" \
+  || fail "--resource filter returned unexpected resource"
+
+# --resource filter for an inline-only IAM role (no ManagedPolicyArns → no AWS needed)
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --output json \
+  --resource AnotherRole \
+  "$TESTDATA/test-cf-template.yaml" > "$TMPDIR_TEST/cf_another_role.json" || true
+
+jq -e '.resource == "AnotherRole" and .summary.allowed == 2 and .summary.blocked == 0' \
+  "$TMPDIR_TEST/cf_another_role.json" > /dev/null \
+  && pass "AnotherRole (inline-only): allowed=2 blocked=0" \
+  || fail "AnotherRole counts wrong (expected 2 allowed, 0 blocked)"
+
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --resource AnotherRole \
+  "$TESTDATA/test-cf-template.yaml" \
+  && pass "AnotherRole inline-only role exits zero (nothing blocked)" \
+  || fail "AnotherRole should exit zero when all actions are allowed"
+
+# --resource filter — unknown resource → error
+"$BINARY" pb-check-cf \
+  --pb "$TESTDATA/test-pb.json" \
+  --resource NonExistentResource \
+  "$TESTDATA/test-cf-template.yaml" 2>"$TMPDIR_TEST/cf_bad_resource.txt" \
+  && fail "Should error when --resource not found" \
+  || pass "pb-check-cf correctly errors for unknown --resource"
+
+grep -qi "not found\|available" "$TMPDIR_TEST/cf_bad_resource.txt" \
+  && pass "Error message mentions available resources" \
+  || fail "Error message should list available resources"
+
+# Standalone policy without --pb → error
+"$BINARY" pb-check-cf \
+  "$TESTDATA/test-cf-policies.yaml" 2>"$TMPDIR_TEST/cf_no_pb.txt" \
+  && fail "pb-check-cf standalone policy without --pb should error" \
+  || pass "pb-check-cf correctly requires --pb for standalone policies"
+
+grep -qi "pb\|permission boundary" "$TMPDIR_TEST/cf_no_pb.txt" \
+  && pass "Error message mentions --pb requirement" \
+  || fail "Error message should mention --pb"
+
+# Aliases
+"$BINARY" check-cf --help > /dev/null 2>&1 \
+  && pass "check-cf alias works" \
+  || fail "check-cf alias not registered"
+
+"$BINARY" ccf --help > /dev/null 2>&1 \
+  && pass "ccf alias works" \
+  || fail "ccf alias not registered"
+
+# -----------------------------------------------------------------------
+# gendocs
+# -----------------------------------------------------------------------
+echo ""
+echo "=== gendocs ==="
+"$BINARY" gendocs > /dev/null 2>&1 \
+  && pass "gendocs runs without error" \
+  || fail "gendocs failed"
+
+[ -f "./docs/iamctl.md" ] \
+  && pass "gendocs created docs/iamctl.md" \
+  || fail "docs/iamctl.md not found after gendocs"
+
+[ -f "./docs/iamctl_pb-check-policy.md" ] \
+  && pass "gendocs created docs for pb-check-policy" \
+  || fail "docs/iamctl_pb-check-policy.md not found"
+
+[ -f "./docs/iamctl_pb-check-cf.md" ] \
+  && pass "gendocs created docs for pb-check-cf" \
+  || fail "docs/iamctl_pb-check-cf.md not found"
+
+# -----------------------------------------------------------------------
+# AWS-requiring commands — --help smoke tests
+# -----------------------------------------------------------------------
+echo ""
+echo "=== AWS-requiring commands (--help smoke tests) ==="
+
+for cmd_alias in "shrink-role-policies srp shrink" \
+                 "role-list rl search-roles" \
+                 "policy-list pl search-policies" \
+                 "describe-role dr" \
+                 "describe-policy dp" \
+                 "pb-check-role check-role cr" \
+                 "policy-from-role-usage pfu activity-policy"; do
+  primary=$(echo "$cmd_alias" | awk '{print $1}')
+  "$BINARY" "$primary" --help > /dev/null 2>&1 \
+    && pass "$primary is registered (--help works)" \
+    || fail "$primary --help failed"
+  for alias in $(echo "$cmd_alias" | awk '{$1=""; print $0}'); do
+    "$BINARY" "$alias" --help > /dev/null 2>&1 \
+      && pass "  alias '$alias' works" \
+      || fail "  alias '$alias' not registered"
+  done
+done
+
+# -----------------------------------------------------------------------
 # Edge cases
 # -----------------------------------------------------------------------
 echo ""
