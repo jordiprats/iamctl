@@ -512,3 +512,107 @@ func TestDescribeManagedPolicy(t *testing.T) {
 		t.Fatalf("unexpected parsed policy document")
 	}
 }
+
+func TestFetchRoleInlinePolicies(t *testing.T) {
+	s3Doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":"*"}]}`
+	ec2Doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ec2:DescribeInstances"],"Resource":"*"}]}`
+
+	docs := map[string]string{
+		"S3Inline":  s3Doc,
+		"EC2Inline": ec2Doc,
+	}
+
+	mock := &mockIAMClient{
+		listRolePoliciesF: func(ctx context.Context, p *iam.ListRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+			if *p.RoleName != "test-role" {
+				t.Fatalf("unexpected role name: %s", *p.RoleName)
+			}
+			return &iam.ListRolePoliciesOutput{
+				PolicyNames: []string{"S3Inline", "EC2Inline"},
+			}, nil
+		},
+		getRolePolicyF: func(ctx context.Context, p *iam.GetRolePolicyInput, o ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
+			d, ok := docs[*p.PolicyName]
+			if !ok {
+				t.Fatalf("unexpected policy name: %s", *p.PolicyName)
+			}
+			return &iam.GetRolePolicyOutput{
+				PolicyName:     p.PolicyName,
+				PolicyDocument: aws.String(urlEncode(d)),
+			}, nil
+		},
+	}
+
+	result, err := FetchRoleInlinePolicies(context.Background(), mock, "test-role")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 inline policies, got %d", len(result))
+	}
+	if _, ok := result["S3Inline"]; !ok {
+		t.Fatal("missing S3Inline")
+	}
+	if _, ok := result["EC2Inline"]; !ok {
+		t.Fatal("missing EC2Inline")
+	}
+	if len(result["S3Inline"].Statement) != 1 {
+		t.Fatalf("expected 1 statement in S3Inline, got %d", len(result["S3Inline"].Statement))
+	}
+}
+
+func TestFetchRoleInlinePolicies_Paginated(t *testing.T) {
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":"*"}]}`
+	listCalls := 0
+
+	mock := &mockIAMClient{
+		listRolePoliciesF: func(ctx context.Context, p *iam.ListRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+			listCalls++
+			if listCalls == 1 {
+				return &iam.ListRolePoliciesOutput{
+					PolicyNames: []string{"Inline1"},
+					IsTruncated: true,
+					Marker:      aws.String("next"),
+				}, nil
+			}
+			return &iam.ListRolePoliciesOutput{
+				PolicyNames: []string{"Inline2"},
+			}, nil
+		},
+		getRolePolicyF: func(ctx context.Context, p *iam.GetRolePolicyInput, o ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
+			return &iam.GetRolePolicyOutput{
+				PolicyName:     p.PolicyName,
+				PolicyDocument: aws.String(urlEncode(doc)),
+			}, nil
+		},
+	}
+
+	result, err := FetchRoleInlinePolicies(context.Background(), mock, "paged-role")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 policies, got %d", len(result))
+	}
+	if listCalls != 2 {
+		t.Fatalf("expected 2 list calls, got %d", listCalls)
+	}
+}
+
+func TestFetchRoleInlinePolicies_Empty(t *testing.T) {
+	mock := &mockIAMClient{
+		listRolePoliciesF: func(ctx context.Context, p *iam.ListRolePoliciesInput, o ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+			return &iam.ListRolePoliciesOutput{
+				PolicyNames: []string{},
+			}, nil
+		},
+	}
+
+	result, err := FetchRoleInlinePolicies(context.Background(), mock, "empty-role")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("expected empty map, got %d entries", len(result))
+	}
+}

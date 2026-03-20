@@ -216,6 +216,49 @@ func FetchRolePolicies(ctx context.Context, client IAMClient, roleName string) (
 	return result, nil
 }
 
+// FetchRoleInlinePolicies lists and fetches all inline policies for a role.
+// Returns a map of policy name -> parsed PolicyDocument.
+func FetchRoleInlinePolicies(ctx context.Context, client IAMClient, roleName string) (map[string]policy.PolicyDocument, error) {
+	var names []string
+	var marker *string
+	for {
+		out, err := client.ListRolePolicies(ctx, &iam.ListRolePoliciesInput{
+			RoleName: &roleName,
+			Marker:   marker,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing inline policies for role %q: %w", roleName, err)
+		}
+		names = append(names, out.PolicyNames...)
+		if !out.IsTruncated {
+			break
+		}
+		marker = out.Marker
+	}
+
+	result := make(map[string]policy.PolicyDocument, len(names))
+	for _, name := range names {
+		n := name
+		out, err := client.GetRolePolicy(ctx, &iam.GetRolePolicyInput{
+			RoleName:   &roleName,
+			PolicyName: &n,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("getting inline policy %q for role %q: %w", name, roleName, err)
+		}
+		docStr, err := url.QueryUnescape(*out.PolicyDocument)
+		if err != nil {
+			return nil, fmt.Errorf("decoding inline policy %q for role %q: %w", name, roleName, err)
+		}
+		var doc policy.PolicyDocument
+		if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+			return nil, fmt.Errorf("parsing inline policy %q for role %q: %w", name, roleName, err)
+		}
+		result[name] = doc
+	}
+	return result, nil
+}
+
 // FetchManagedPolicyAsBoundary fetches a managed policy by ARN and returns it as a PermissionBoundary.
 func FetchManagedPolicyAsBoundary(ctx context.Context, client IAMClient, policyARN string) (*boundary.PermissionBoundary, error) {
 	doc, err := FetchManagedPolicy(ctx, client, policyARN)

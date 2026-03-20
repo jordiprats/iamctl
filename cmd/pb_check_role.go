@@ -17,7 +17,7 @@ func newCheckRoleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "pb-check-role <role-name>",
 		Aliases: []string{"check-role", "cr"},
-		Short:   "Check an IAM role's managed-policy actions against a permission boundary",
+		Short:   "Check an IAM role's actions (managed and inline policies) against a permission boundary",
 		Args:    cobra.ExactArgs(1),
 		Example: `  iamctl pb-check-role my-role
   iamctl pb-check-role --pb boundary.json --output json my-role
@@ -47,40 +47,54 @@ func newCheckRoleCmd() *cobra.Command {
 				}
 			}
 
-			policies, err := awsiam.FetchRolePolicies(cmd.Context(), iamClient, roleName)
+			managedPolicies, err := awsiam.FetchRolePolicies(cmd.Context(), iamClient, roleName)
 			if err != nil {
-				return fmt.Errorf("fetching role policies: %w", err)
+				return fmt.Errorf("fetching managed policies: %w", err)
 			}
 
-			if len(policies) == 0 {
-				fmt.Println("No managed policies attached to role")
+			inlinePolicies, err := awsiam.FetchRoleInlinePolicies(cmd.Context(), iamClient, roleName)
+			if err != nil {
+				return fmt.Errorf("fetching inline policies: %w", err)
+			}
+
+			if len(managedPolicies) == 0 && len(inlinePolicies) == 0 {
+				fmt.Println("No policies attached to role")
 				return nil
 			}
 
-			// Merge all actions from all attached policies
-			mergedAllow := make(map[string]string) // action -> policy name
+			// Merge all actions from managed and inline policies
+			mergedAllow := make(map[string]string) // action -> policy name (with "(inline)" suffix for inline)
 			mergedDeny := make(map[string]string)
 			var allNotActionStmts []policy.NotActionStatement
 			hasWildcards := false
 			hasConditions := false
 			hasNotResources := false
 
-			for policyName, policyDoc := range policies {
+			for policyName, policyDoc := range managedPolicies {
 				extracted := policy.ExtractActions(policyDoc)
-				if extracted.HasWildcards {
-					hasWildcards = true
-				}
-				if extracted.HasConditions {
-					hasConditions = true
-				}
-				if extracted.HasNotResources {
-					hasNotResources = true
-				}
+				hasWildcards = hasWildcards || extracted.HasWildcards
+				hasConditions = hasConditions || extracted.HasConditions
+				hasNotResources = hasNotResources || extracted.HasNotResources
 				for _, a := range extracted.AllowActions {
 					mergedAllow[a] = policyName
 				}
 				for _, a := range extracted.DenyActions {
 					mergedDeny[a] = policyName
+				}
+				allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
+			}
+
+			for policyName, policyDoc := range inlinePolicies {
+				extracted := policy.ExtractActions(policyDoc)
+				hasWildcards = hasWildcards || extracted.HasWildcards
+				hasConditions = hasConditions || extracted.HasConditions
+				hasNotResources = hasNotResources || extracted.HasNotResources
+				label := policyName + " (inline)"
+				for _, a := range extracted.AllowActions {
+					mergedAllow[a] = label
+				}
+				for _, a := range extracted.DenyActions {
+					mergedDeny[a] = label
 				}
 				allNotActionStmts = append(allNotActionStmts, extracted.NotActionStmts...)
 			}
@@ -131,12 +145,17 @@ func newCheckRoleCmd() *cobra.Command {
 			switch format {
 			case "json":
 				warnings := policy.Warnings(mergedExtracted, true)
-				// Build per-policy breakdown
-				policyNames := make([]string, 0, len(policies))
-				for name := range policies {
-					policyNames = append(policyNames, name)
+				managedNames := make([]string, 0, len(managedPolicies))
+				for name := range managedPolicies {
+					managedNames = append(managedNames, name)
 				}
-				sort.Strings(policyNames)
+				sort.Strings(managedNames)
+
+				inlineNames := make([]string, 0, len(inlinePolicies))
+				for name := range inlinePolicies {
+					inlineNames = append(inlineNames, name)
+				}
+				sort.Strings(inlineNames)
 
 				blockedDetail := make([]map[string]string, 0, len(blockedActions))
 				for _, a := range blockedActions {
@@ -148,14 +167,16 @@ func newCheckRoleCmd() *cobra.Command {
 				result := map[string]interface{}{
 					"role":                  roleName,
 					"evaluation_method":     pb.EvaluationMethod,
-					"attached_policies":     policyNames,
+					"managed_policies":      managedNames,
+					"inline_policies":       inlineNames,
 					"allowed":               policy.NullableStringSlice(allowedActions),
 					"blocked":               blockedDetail,
 					"skipped_deny":          policy.NullableStringSlice(denyActions),
 					"not_action_statements": policy.NullableStringSlice(notActionSummaries),
 					"warnings":              warnings,
 					"summary": map[string]int{
-						"attached_policies":     len(policies),
+						"managed_policies":      len(managedPolicies),
+						"inline_policies":       len(inlinePolicies),
 						"allowed":               len(allowedActions),
 						"blocked":               len(blockedActions),
 						"skipped_deny":          len(denyActions),
@@ -169,9 +190,13 @@ func newCheckRoleCmd() *cobra.Command {
 				warnings := policy.Warnings(mergedExtracted, false)
 				fmt.Fprintf(os.Stderr, "Role: %s\n", roleName)
 				fmt.Fprintf(os.Stderr, "Evaluation method: %s\n", pb.EvaluationMethod)
-				fmt.Fprintf(os.Stderr, "Attached managed policies: %d\n", len(policies))
-				for name := range policies {
+				fmt.Fprintf(os.Stderr, "Managed policies: %d\n", len(managedPolicies))
+				for name := range managedPolicies {
 					fmt.Fprintf(os.Stderr, "  - %s\n", name)
+				}
+				fmt.Fprintf(os.Stderr, "Inline policies: %d\n", len(inlinePolicies))
+				for name := range inlinePolicies {
+					fmt.Fprintf(os.Stderr, "  - %s (inline)\n", name)
 				}
 				fmt.Fprintln(os.Stderr)
 				printWarnings(warnings, os.Stderr)
