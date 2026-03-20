@@ -228,13 +228,15 @@ W_ALLOWED=$(jq '.summary.allowed' "$TMPDIR_TEST/wildcard_result.json")
 W_BLOCKED=$(jq '.summary.blocked' "$TMPDIR_TEST/wildcard_result.json")
 echo "Wildcard policy: allowed=$W_ALLOWED blocked=$W_BLOCKED"
 
-if [ "$W_ALLOWED" -ne "2" ]; then
-  fail "Expected 2 allowed, got $W_ALLOWED"
+# s3:* and ec2:Describe* overlap with NotAction entries → 3 allowed (both wildcards + iam:GetUser)
+# iam:CreateRole has no match in NotAction → 1 blocked
+if [ "$W_ALLOWED" -ne "3" ]; then
+  fail "Expected 3 allowed, got $W_ALLOWED"
 else
   pass "Wildcard allowed count correct ($W_ALLOWED)"
 fi
-if [ "$W_BLOCKED" -ne "2" ]; then
-  fail "Expected 2 blocked, got $W_BLOCKED"
+if [ "$W_BLOCKED" -ne "1" ]; then
+  fail "Expected 1 blocked, got $W_BLOCKED"
 else
   pass "Wildcard blocked count correct ($W_BLOCKED)"
 fi
@@ -402,6 +404,136 @@ echo "=== --version flag ==="
 "$BINARY" --version | grep -qE "iamctl|version" \
   && pass "Version output looks correct" \
   || fail "Version output missing expected text"
+
+# -----------------------------------------------------------------------
+# Multi-service PB: Deny+NotAction style (wildcard false-positive fix)
+# -----------------------------------------------------------------------
+echo ""
+echo "=== Multi-service Deny+NotAction PB ==="
+
+# Specific allowed actions
+"$BINARY" check-action --pb "$TESTDATA/test-pb-multi-service.json" ec2:DescribeInstances \
+  && pass "ec2:DescribeInstances allowed by multi-service PB" \
+  || fail "ec2:DescribeInstances should be allowed by multi-service PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-multi-service.json" glue:GetDatabase \
+  && pass "glue:GetDatabase allowed by multi-service PB" \
+  || fail "glue:GetDatabase should be allowed by multi-service PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-multi-service.json" logs:PutLogEvents \
+  && pass "logs:PutLogEvents allowed by multi-service PB" \
+  || fail "logs:PutLogEvents should be allowed by multi-service PB"
+
+# Specific blocked actions
+"$BINARY" check-action --pb "$TESTDATA/test-pb-multi-service.json" ec2:RunInstances \
+  && fail "ec2:RunInstances should be blocked by multi-service PB" \
+  || pass "ec2:RunInstances correctly blocked by multi-service PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-multi-service.json" athena:GetQueryResults \
+  && fail "athena:GetQueryResults should be blocked (no athena entries in PB)" \
+  || pass "athena:GetQueryResults correctly blocked by multi-service PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-multi-service.json" cloudtrail:LookupEvents \
+  && fail "cloudtrail:LookupEvents should be blocked (no cloudtrail in PB)" \
+  || pass "cloudtrail:LookupEvents correctly blocked by multi-service PB"
+
+# Regression test: wildcard source action must not be falsely blocked when the
+# service IS in the Deny+NotAction list (glue:* overlaps with glue entries).
+cat > "$TMPDIR_TEST/wildcard-glue-athena.json" << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["glue:*", "athena:*"],
+    "Resource": "*"
+  }]
+}
+EOF
+"$BINARY" check-policy \
+  --pb "$TESTDATA/test-pb-multi-service.json" \
+  --output json \
+  "$TMPDIR_TEST/wildcard-glue-athena.json" > "$TMPDIR_TEST/wildcard_multi.json" || true
+
+jq -e '.blocked | map(select(startswith("glue:"))) | length == 0' "$TMPDIR_TEST/wildcard_multi.json" \
+  && pass "glue:* wildcard not falsely blocked by Deny+NotAction PB (wildcard fix)" \
+  || fail "glue:* should not be blocked — wildcard false-positive regression"
+
+jq -e '.blocked | map(select(startswith("athena:"))) | length > 0' "$TMPDIR_TEST/wildcard_multi.json" \
+  && pass "athena:* wildcard correctly blocked when service not in PB" \
+  || fail "athena:* should be blocked (no athena entries in PB)"
+
+# -----------------------------------------------------------------------
+# Allow+NotAction style PB
+# -----------------------------------------------------------------------
+echo ""
+echo "=== Allow+NotAction style PB ==="
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-allow-notaction.json" s3:GetObject \
+  && pass "s3:GetObject allowed by Allow+NotAction PB" \
+  || fail "s3:GetObject should be allowed by Allow+NotAction PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-allow-notaction.json" ec2:DescribeInstances \
+  && pass "ec2:DescribeInstances allowed by Allow+NotAction PB" \
+  || fail "ec2:DescribeInstances should be allowed by Allow+NotAction PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-allow-notaction.json" iam:CreateRole \
+  && fail "iam:CreateRole should be blocked (iam:* in NotAction exclusion)" \
+  || pass "iam:CreateRole correctly blocked by Allow+NotAction PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-allow-notaction.json" sts:AssumeRole \
+  && fail "sts:AssumeRole should be blocked (explicitly in NotAction exclusion)" \
+  || pass "sts:AssumeRole correctly blocked by Allow+NotAction PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-allow-notaction.json" organizations:DescribeOrganization \
+  && fail "organizations:DescribeOrganization should be blocked (organizations:* in NotAction)" \
+  || pass "organizations:DescribeOrganization correctly blocked by Allow+NotAction PB"
+
+# -----------------------------------------------------------------------
+# Simple allow-list PB
+# -----------------------------------------------------------------------
+echo ""
+echo "=== Simple allow-list PB ==="
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-simple-allow.json" s3:GetObject \
+  && pass "s3:GetObject allowed by simple allow-list PB" \
+  || fail "s3:GetObject should be allowed by simple PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-simple-allow.json" s3:PutObject \
+  && pass "s3:PutObject allowed by simple allow-list PB" \
+  || fail "s3:PutObject should be allowed by simple PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-simple-allow.json" ec2:DescribeInstances \
+  && pass "ec2:DescribeInstances allowed by simple PB (ec2:Describe*)" \
+  || fail "ec2:DescribeInstances should be allowed by simple PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-simple-allow.json" iam:GetRole \
+  && pass "iam:GetRole allowed by simple PB (iam:Get*)" \
+  || fail "iam:GetRole should be allowed by simple PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-simple-allow.json" ec2:RunInstances \
+  && fail "ec2:RunInstances should be blocked by simple PB" \
+  || pass "ec2:RunInstances correctly blocked by simple PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-simple-allow.json" iam:CreateRole \
+  && fail "iam:CreateRole should be blocked (only iam:Get*/List* in simple PB)" \
+  || pass "iam:CreateRole correctly blocked by simple PB"
+
+"$BINARY" check-action --pb "$TESTDATA/test-pb-simple-allow.json" athena:GetQueryResults \
+  && fail "athena:GetQueryResults should be blocked (no athena in simple PB)" \
+  || pass "athena:GetQueryResults correctly blocked by simple PB"
+
+# -----------------------------------------------------------------------
+# merge-role-policies command registration
+# -----------------------------------------------------------------------
+echo ""
+echo "=== merge-role-policies command ==="
+"$BINARY" merge-role-policies --help > /dev/null 2>&1 \
+  && pass "merge-role-policies command is registered and --help works" \
+  || fail "merge-role-policies --help failed"
+
+"$BINARY" mrp --help > /dev/null 2>&1 \
+  && pass "mrp alias works" \
+  || fail "mrp alias not registered"
 
 # -----------------------------------------------------------------------
 # Edge cases

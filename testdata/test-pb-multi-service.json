@@ -1,0 +1,32 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Deny",
+      "Resource": "*",
+      "NotAction": [
+        "ec2:Describe*",
+        "ec2:CreateTags",
+        "glue:*A*",
+        "glue:*G*",
+        "glue:L*",
+        "glue:S*",
+        "elasticache:D*s",
+        "elasticache:L*",
+        "s3:G*",
+        "s3:List*",
+        "s3:*J*",
+        "iam:Get*",
+        "iam:List*",
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ]
+    }
+  ]
+}

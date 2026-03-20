@@ -109,6 +109,11 @@ func EvaluatePolicy(action string, doc policy.PolicyDocument) bool {
 			} else if stmt.NotAction != nil {
 				patterns := matcher.ExtractStrings(stmt.NotAction)
 				if matches, _ := matcher.MatchesAnyPattern(action, patterns); !matches {
+					// For wildcard actions: if the wildcard overlaps with a NotAction entry,
+					// we can't confirm the wildcard is fully outside NotAction — skip.
+					if matcher.IsWildcardAction(action) && matcher.WildcardOverlapsAnyPattern(action, patterns) {
+						break
+					}
 					allowed = true
 				}
 			}
@@ -116,6 +121,11 @@ func EvaluatePolicy(action string, doc policy.PolicyDocument) bool {
 			if stmt.NotAction != nil {
 				patterns := matcher.ExtractStrings(stmt.NotAction)
 				if matches, _ := matcher.MatchesAnyPattern(action, patterns); !matches {
+					// For wildcard actions: if the wildcard overlaps with a NotAction entry,
+					// at least some expansions are NOT denied — skip to avoid false positives.
+					if matcher.IsWildcardAction(action) && matcher.WildcardOverlapsAnyPattern(action, patterns) {
+						break
+					}
 					denied = true
 				}
 			} else if stmt.Action != nil {

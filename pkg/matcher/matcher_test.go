@@ -156,3 +156,115 @@ func TestIsWildcardAction(t *testing.T) {
 		}
 	}
 }
+
+func TestPatternsCanOverlap(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		// Same service wildcards overlap
+		{"glue:*", "glue:*A*", true},
+		{"glue:*A*", "glue:*", true},
+		// Describe* overlaps with D*s (both start with "elasticache:D")
+		{"elasticache:Describe*", "elasticache:D*s", true},
+		// Different services never overlap
+		{"athena:Get*", "glue:*A*", false},
+		{"athena:BatchGet*", "elasticache:D*s", false},
+		// Specific action shares prefix with wildcard pattern in same service
+		{"s3:GetObject", "s3:Get*", true},
+		// Same exact token overlaps with itself
+		{"ec2:RunInstances", "ec2:RunInstances", true},
+		// Star overlaps with anything
+		{"*", "s3:GetObject", true},
+		{"s3:*", "*", true},
+	}
+	for _, tc := range tests {
+		got := PatternsCanOverlap(tc.a, tc.b)
+		if got != tc.want {
+			t.Errorf("PatternsCanOverlap(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestWildcardOverlapsAnyPattern(t *testing.T) {
+	// Wildcard grant overlapping with a NotAction list that has same-service entries
+	glueNotAction := []string{"glue:*A*", "glue:*G*", "glue:L*", "glue:S*", "s3:G*"}
+	if !WildcardOverlapsAnyPattern("glue:*", glueNotAction) {
+		t.Error("glue:* should overlap with glue:*A* and others")
+	}
+
+	// Wildcard grant with NO entries for its service → no overlap
+	athenaNotAction := []string{"glue:*A*", "s3:G*", "ec2:Des*"}
+	if WildcardOverlapsAnyPattern("athena:BatchGet*", athenaNotAction) {
+		t.Error("athena:BatchGet* should NOT overlap when no athena entries exist")
+	}
+
+	// elasticache:Describe* overlaps with elasticache:D*s (shared prefix "elasticache:D")
+	if !WildcardOverlapsAnyPattern("elasticache:Describe*", []string{"elasticache:D*s"}) {
+		t.Error("elasticache:Describe* should detect overlap with elasticache:D*s")
+	}
+}
+
+func TestPatternsCanOverlap_ServiceBoundary(t *testing.T) {
+	// Two services that share a common prefix string should NOT overlap
+	// "ec2:" vs "ec2-instance-connect:" — different services despite shared start
+	// fixedPrefix("ec2:*") = "ec2:" (4 chars)
+	// fixedPrefix("ec2-instance-connect:*") = "ec2-instance-connect:" (21 chars)
+	// min=4: "ec2:" vs "ec2-" — '2' vs '2', ':' vs '-' → NOT equal
+	if PatternsCanOverlap("ec2:*", "ec2-instance-connect:*") {
+		t.Error("ec2:* and ec2-instance-connect:* should NOT overlap — they are different services")
+	}
+
+	// Sanity: same service always overlaps
+	if !PatternsCanOverlap("ec2:*", "ec2:Describe*") {
+		t.Error("ec2:* and ec2:Describe* should overlap")
+	}
+}
+
+func TestPatternsCanOverlap_EmptyPatterns(t *testing.T) {
+	// Both empty → overlap at zero length
+	if !PatternsCanOverlap("", "") {
+		t.Error("two empty patterns should be considered overlapping")
+	}
+	// One empty → min=0 → the zero-length prefix matches anything
+	if !PatternsCanOverlap("", "s3:GetObject") {
+		t.Error("empty pattern should overlap with anything")
+	}
+}
+
+func TestPatternsCanOverlap_CaseInsensitive(t *testing.T) {
+	// Prefix comparison is case-insensitive
+	if !PatternsCanOverlap("S3:G*", "s3:GetObject") {
+		t.Error("prefix comparison should be case-insensitive")
+	}
+}
+
+func TestWildcardOverlapsAnyPattern_RealisticNotActionList(t *testing.T) {
+	// Simulate a realistic minified-PB NotAction list (subset of the user's real case)
+	notAction := []string{
+		"ec2:Describe*", "ec2:CreateTags",
+		"glue:*A*", "glue:*G*", "glue:L*", "glue:S*",
+		"elasticache:D*s", "elasticache:L*",
+		"s3:G*", "s3:List*", "s3:*J*",
+		"iam:Get*", "iam:List*",
+	}
+
+	// Services WITH entries: should overlap — their fixed prefix matches at least one NotAction entry
+	withOverlap := []string{"ec2:*", "glue:*", "elasticache:Describe*", "s3:*", "s3:Describe*", "iam:*"}
+	for _, action := range withOverlap {
+		if !WildcardOverlapsAnyPattern(action, notAction) {
+			t.Errorf("expected %q to overlap with at least one NotAction entry", action)
+		}
+	}
+
+	// Services WITHOUT entries: should NOT overlap
+	// Note: iam:Create* does NOT overlap with iam:Get*/iam:List* because its fixed prefix
+	// "iam:Create" diverges from "iam:Get" and "iam:List" at the 5th character.
+	// It will therefore be correctly reported as "blocked" (all creates are outside the boundary).
+	noOverlap := []string{"athena:*", "athena:Get*", "athena:BatchGet*", "cloudtrail:*", "cloudtrail:DescribeTrails", "iam:Create*"}
+	for _, action := range noOverlap {
+		if WildcardOverlapsAnyPattern(action, notAction) {
+			t.Errorf("expected %q to NOT overlap with any NotAction entry", action)
+		}
+	}
+}
