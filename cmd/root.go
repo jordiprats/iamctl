@@ -24,7 +24,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newPolicyListCmd())
 	root.AddCommand(newPolicyFromRoleUsageCmd())
 	root.AddCommand(newShrinkRolePoliciesCmd())
-	root.AddCommand(newMergeRolePoliciesCmd())
+	root.AddCommand(newMergePoliciesCmd())
 	root.AddCommand(GenDocsCmd(root))
 
 	return root

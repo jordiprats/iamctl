@@ -16,7 +16,7 @@ Inspect AWS IAM roles and policies, validate access against permission boundarie
 
 * [iamctl describe-policy](iamctl_describe-policy.md)	 - Describe a managed policy and show its JSON document
 * [iamctl describe-role](iamctl_describe-role.md)	 - Describe an IAM role, including summary, managed policies, and inline policies
-* [iamctl merge-role-policies](iamctl_merge-role-policies.md)	 - Merge all managed policies attached to a role into a single unified policy JSON
+* [iamctl merge-policies](iamctl_merge-policies.md)	 - Merge IAM policies from a role or CloudFormation template into a single unified policy JSON
 * [iamctl pb-check-action](iamctl_pb-check-action.md)	 - Check whether one or more actions are allowed by a permission boundary
 * [iamctl pb-check-cf](iamctl_pb-check-cf.md)	 - Check CloudFormation IAM resources against a permission boundary
 * [iamctl pb-check-policy](iamctl_pb-check-policy.md)	 - Check which policy actions are allowed or blocked by a permission boundary

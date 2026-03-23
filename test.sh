@@ -632,21 +632,137 @@ echo "=== Simple allow-list PB ==="
   || pass "athena:GetQueryResults correctly blocked by simple PB"
 
 # -----------------------------------------------------------------------
-# merge-role-policies command registration
+# merge-policies command (unified: --role / --cf-template)
 # -----------------------------------------------------------------------
 echo ""
-echo "=== merge-role-policies command ==="
+echo "=== merge-policies command ==="
+
+# Primary command
+"$BINARY" merge-policies --help > /dev/null 2>&1 \
+  && pass "merge-policies command is registered and --help works" \
+  || fail "merge-policies --help failed"
+
+# Backward-compatible aliases
 "$BINARY" merge-role-policies --help > /dev/null 2>&1 \
-  && pass "merge-role-policies command is registered and --help works" \
-  || fail "merge-role-policies --help failed"
+  && pass "merge-role-policies alias works" \
+  || fail "merge-role-policies alias not registered"
 
 "$BINARY" mrp --help > /dev/null 2>&1 \
   && pass "mrp alias works" \
   || fail "mrp alias not registered"
 
-"$BINARY" merge-policies --help > /dev/null 2>&1 \
-  && pass "merge-policies alias works" \
-  || fail "merge-policies alias not registered"
+"$BINARY" mp --help > /dev/null 2>&1 \
+  && pass "mp alias works" \
+  || fail "mp alias not registered"
+
+"$BINARY" merge-cf-policies --help > /dev/null 2>&1 \
+  && pass "merge-cf-policies alias works" \
+  || fail "merge-cf-policies alias not registered"
+
+"$BINARY" mcp --help > /dev/null 2>&1 \
+  && pass "mcp alias works" \
+  || fail "mcp alias not registered"
+
+# No source → error
+"$BINARY" merge-policies 2>"$TMPDIR_TEST/mp_no_source.txt" \
+  && fail "merge-policies should error when no source specified" \
+  || true
+grep -qi "\-\-role\|--cf-template\|source" "$TMPDIR_TEST/mp_no_source.txt" \
+  && pass "Error message mentions --role or --cf-template" \
+  || fail "Error should mention --role or --cf-template"
+
+# Both sources → error
+"$BINARY" merge-policies --role foo --cf-template bar.yaml 2>"$TMPDIR_TEST/mp_both.txt" \
+  && fail "merge-policies should error when both --role and --cf-template specified" \
+  || true
+grep -qi "only one\|not both" "$TMPDIR_TEST/mp_both.txt" \
+  && pass "Error message mentions only one source" \
+  || fail "Error should mention only one source"
+
+# --resource without --cf-template → error
+"$BINARY" merge-policies --role foo --resource Bar 2>"$TMPDIR_TEST/mp_resource_no_cf.txt" \
+  && fail "merge-policies should error when --resource used without --cf-template" \
+  || true
+grep -qi "cf-template" "$TMPDIR_TEST/mp_resource_no_cf.txt" \
+  && pass "Error message mentions --cf-template requirement for --resource" \
+  || fail "Error should mention --cf-template"
+
+# --cf-template with inline-only template (no AWS needed)
+"$BINARY" merge-policies \
+  --cf-template "$TESTDATA/test-cf-merge.yaml" \
+  --quiet > "$TMPDIR_TEST/mp_cf_all.json" \
+  && pass "merge-policies --cf-template works with inline-only template" \
+  || fail "merge-policies --cf-template should work with inline-only template"
+
+# Should produce valid JSON with statements from all resources
+python3 -m json.tool "$TMPDIR_TEST/mp_cf_all.json" > /dev/null 2>&1 \
+  && pass "CF merge output is valid JSON" \
+  || fail "CF merge output is not valid JSON"
+
+# 5 total statements: AppRole S3Access(2) + LogAccess(1) + WorkerRole DynamoAccess(1) + SharedPolicy(1)
+STMT_COUNT=$(jq '.Statement | length' "$TMPDIR_TEST/mp_cf_all.json")
+if [ "$STMT_COUNT" -eq 5 ]; then
+  pass "CF merge: 5 statements from all resources"
+else
+  fail "Expected 5 statements, got $STMT_COUNT"
+fi
+
+# --resource filter
+"$BINARY" merge-policies \
+  --cf-template "$TESTDATA/test-cf-merge.yaml" \
+  --resource AppRole \
+  --quiet > "$TMPDIR_TEST/mp_cf_role.json" \
+  && pass "merge-policies --cf-template --resource AppRole works" \
+  || fail "merge-policies --cf-template --resource AppRole failed"
+
+ROLE_STMTS=$(jq '.Statement | length' "$TMPDIR_TEST/mp_cf_role.json")
+if [ "$ROLE_STMTS" -eq 3 ]; then
+  pass "AppRole merge: 3 statements (S3Access 2 + LogAccess 1)"
+else
+  fail "Expected 3 statements for AppRole, got $ROLE_STMTS"
+fi
+
+# --ignore-deny
+"$BINARY" merge-policies \
+  --cf-template "$TESTDATA/test-cf-merge.yaml" \
+  --resource AppRole \
+  --ignore-deny \
+  --quiet > "$TMPDIR_TEST/mp_cf_nodeny.json"
+
+NODENY_STMTS=$(jq '.Statement | length' "$TMPDIR_TEST/mp_cf_nodeny.json")
+if [ "$NODENY_STMTS" -eq 2 ]; then
+  pass "AppRole with --ignore-deny: 2 statements (Deny removed)"
+else
+  fail "Expected 2 statements with --ignore-deny, got $NODENY_STMTS"
+fi
+
+jq -e '[.Statement[].Effect] | all(. == "Allow")' "$TMPDIR_TEST/mp_cf_nodeny.json" > /dev/null \
+  && pass "All remaining statements are Allow" \
+  || fail "Should only have Allow statements after --ignore-deny"
+
+# --resource with unknown name → error
+"$BINARY" merge-policies \
+  --cf-template "$TESTDATA/test-cf-merge.yaml" \
+  --resource NonExistent 2>"$TMPDIR_TEST/mp_bad_resource.txt" \
+  && fail "Should error for unknown --resource" \
+  || pass "merge-policies correctly errors for unknown --resource"
+
+grep -qi "not found\|available" "$TMPDIR_TEST/mp_bad_resource.txt" \
+  && pass "Error message lists available resources" \
+  || fail "Error should list available resources"
+
+# --resource for standalone policy
+"$BINARY" merge-policies \
+  --cf-template "$TESTDATA/test-cf-merge.yaml" \
+  --resource SharedPolicy \
+  --quiet > "$TMPDIR_TEST/mp_cf_standalone.json"
+
+SP_STMTS=$(jq '.Statement | length' "$TMPDIR_TEST/mp_cf_standalone.json")
+if [ "$SP_STMTS" -eq 1 ]; then
+  pass "SharedPolicy merge: 1 statement"
+else
+  fail "Expected 1 statement for SharedPolicy, got $SP_STMTS"
+fi
 
 # -----------------------------------------------------------------------
 # pb-check-cf — local inline-only templates (no AWS required)

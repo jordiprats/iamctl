@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"path/filepath"
+	"sort"
 	"testing"
 
+	"github.com/jordiprats/iamctl/pkg/cfn"
 	"github.com/jordiprats/iamctl/pkg/policy"
 )
 
@@ -95,6 +98,257 @@ func TestMergeAndDedupeIntegration(t *testing.T) {
 	// 4 raw statements merged, but 1 is a duplicate → 3 unique
 	if len(deduped.Statement) != 3 {
 		t.Errorf("expected 3 unique statements after dedup, got %d", len(deduped.Statement))
+	}
+}
+
+// --- Tests for mergeFromCfTemplate via collectRolePolicies (inline-only, no AWS) ---
+
+func TestMergeFromCfTemplate_SingleRole(t *testing.T) {
+	tmpl, err := cfn.ParseTemplate(filepath.Join("..", "testdata", "test-cf-merge.yaml"))
+	if err != nil {
+		t.Fatalf("ParseTemplate: %v", err)
+	}
+
+	roles, err := cfn.ExtractIAMRoles(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMRoles: %v", err)
+	}
+
+	// Find AppRole
+	var appRole *cfn.IAMRole
+	for i, r := range roles {
+		if r.LogicalID == "AppRole" {
+			appRole = &roles[i]
+			break
+		}
+	}
+	if appRole == nil {
+		t.Fatal("AppRole not found in template")
+	}
+
+	// AppRole has 2 inline policies: S3Access (2 stmts) + LogAccess (1 stmt)
+	if len(appRole.Properties.InlinePolicies) != 2 {
+		t.Fatalf("expected 2 inline policies, got %d", len(appRole.Properties.InlinePolicies))
+	}
+
+	// Merge inline policies only (no managed, so no AWS needed)
+	allPolicies := make(map[string]policy.PolicyDocument)
+	for name, doc := range appRole.Properties.InlinePolicies {
+		allPolicies[appRole.LogicalID+"/"+name+" (inline)"] = doc
+	}
+
+	merged := mergePolicyDocs(allPolicies)
+
+	// S3Access has 2 statements + LogAccess has 1 = 3 total
+	if len(merged.Statement) != 3 {
+		t.Errorf("expected 3 statements, got %d", len(merged.Statement))
+	}
+}
+
+func TestMergeFromCfTemplate_AllResources(t *testing.T) {
+	tmpl, err := cfn.ParseTemplate(filepath.Join("..", "testdata", "test-cf-merge.yaml"))
+	if err != nil {
+		t.Fatalf("ParseTemplate: %v", err)
+	}
+
+	roles, err := cfn.ExtractIAMRoles(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMRoles: %v", err)
+	}
+	policies, err := cfn.ExtractIAMPolicies(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMPolicies: %v", err)
+	}
+
+	allPolicies := make(map[string]policy.PolicyDocument)
+
+	// Collect inline policies from roles (skip managed, no AWS)
+	for _, role := range roles {
+		for name, doc := range role.Properties.InlinePolicies {
+			allPolicies[role.LogicalID+"/"+name+" (inline)"] = doc
+		}
+	}
+	// Collect standalone policies
+	for _, pol := range policies {
+		allPolicies[pol.LogicalID] = pol.PolicyDocument
+	}
+
+	merged := mergePolicyDocs(allPolicies)
+
+	// AppRole: S3Access(2) + LogAccess(1) = 3
+	// WorkerRole: DynamoAccess(1) = 1
+	// SharedPolicy: 1
+	// Total = 5
+	if len(merged.Statement) != 5 {
+		t.Errorf("expected 5 statements from all resources, got %d", len(merged.Statement))
+	}
+}
+
+func TestMergeFromCfTemplate_WithIgnoreDeny(t *testing.T) {
+	tmpl, err := cfn.ParseTemplate(filepath.Join("..", "testdata", "test-cf-merge.yaml"))
+	if err != nil {
+		t.Fatalf("ParseTemplate: %v", err)
+	}
+
+	roles, err := cfn.ExtractIAMRoles(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMRoles: %v", err)
+	}
+
+	allPolicies := make(map[string]policy.PolicyDocument)
+	for _, role := range roles {
+		for name, doc := range role.Properties.InlinePolicies {
+			allPolicies[role.LogicalID+"/"+name+" (inline)"] = doc
+		}
+	}
+
+	merged := mergePolicyDocs(allPolicies)
+	// Before filtering: AppRole S3Access has 1 Deny (s3:DeleteBucket)
+	filtered := filterDenyStatements(merged.Statement)
+
+	// 4 total minus 1 deny = 3
+	if len(filtered) != 3 {
+		t.Errorf("expected 3 statements after ignore-deny, got %d", len(filtered))
+	}
+	for _, s := range filtered {
+		if s.Effect == "Deny" {
+			t.Error("found Deny statement after filtering")
+		}
+	}
+}
+
+func TestMergeFromCfTemplate_ResourceFilter(t *testing.T) {
+	tmpl, err := cfn.ParseTemplate(filepath.Join("..", "testdata", "test-cf-merge.yaml"))
+	if err != nil {
+		t.Fatalf("ParseTemplate: %v", err)
+	}
+
+	roles, err := cfn.ExtractIAMRoles(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMRoles: %v", err)
+	}
+
+	// Filter to WorkerRole
+	var filtered []cfn.IAMRole
+	for _, r := range roles {
+		if r.LogicalID == "WorkerRole" {
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected to find WorkerRole, got %d matches", len(filtered))
+	}
+
+	allPolicies := make(map[string]policy.PolicyDocument)
+	for name, doc := range filtered[0].Properties.InlinePolicies {
+		allPolicies[filtered[0].LogicalID+"/"+name+" (inline)"] = doc
+	}
+
+	merged := mergePolicyDocs(allPolicies)
+
+	// WorkerRole: DynamoAccess has 1 statement
+	if len(merged.Statement) != 1 {
+		t.Errorf("expected 1 statement for WorkerRole only, got %d", len(merged.Statement))
+	}
+}
+
+func TestMergeFromCfTemplate_StandalonePolicies(t *testing.T) {
+	tmpl, err := cfn.ParseTemplate(filepath.Join("..", "testdata", "test-cf-merge.yaml"))
+	if err != nil {
+		t.Fatalf("ParseTemplate: %v", err)
+	}
+
+	policies, err := cfn.ExtractIAMPolicies(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMPolicies: %v", err)
+	}
+
+	if len(policies) != 1 {
+		t.Fatalf("expected 1 standalone policy, got %d", len(policies))
+	}
+	if policies[0].LogicalID != "SharedPolicy" {
+		t.Errorf("expected SharedPolicy, got %s", policies[0].LogicalID)
+	}
+
+	allPolicies := make(map[string]policy.PolicyDocument)
+	for _, pol := range policies {
+		allPolicies[pol.LogicalID] = pol.PolicyDocument
+	}
+
+	merged := mergePolicyDocs(allPolicies)
+
+	if len(merged.Statement) != 1 {
+		t.Errorf("expected 1 statement from SharedPolicy, got %d", len(merged.Statement))
+	}
+}
+
+func TestMergeFromCfTemplate_DedupeAcrossRoles(t *testing.T) {
+	// Create two roles with an identical statement to check dedup
+	sharedStmt := policy.Statement{Effect: "Allow", Action: "sts:AssumeRole", Resource: "*"}
+	policies := map[string]policy.PolicyDocument{
+		"RoleA/common (inline)": {
+			Version:   "2012-10-17",
+			Statement: []policy.Statement{sharedStmt, {Effect: "Allow", Action: "s3:GetObject", Resource: "*"}},
+		},
+		"RoleB/common (inline)": {
+			Version:   "2012-10-17",
+			Statement: []policy.Statement{sharedStmt, {Effect: "Allow", Action: "ec2:DescribeInstances", Resource: "*"}},
+		},
+	}
+
+	merged := mergePolicyDocs(policies)
+	deduped := dedupeStatements(merged.Statement)
+
+	// 4 raw statements, 1 duplicate → 3 unique
+	if len(deduped) != 3 {
+		t.Errorf("expected 3 unique statements after dedup, got %d", len(deduped))
+	}
+}
+
+func TestMergeFromCfTemplate_PolicyNames(t *testing.T) {
+	tmpl, err := cfn.ParseTemplate(filepath.Join("..", "testdata", "test-cf-merge.yaml"))
+	if err != nil {
+		t.Fatalf("ParseTemplate: %v", err)
+	}
+
+	roles, err := cfn.ExtractIAMRoles(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMRoles: %v", err)
+	}
+	policies, err := cfn.ExtractIAMPolicies(tmpl)
+	if err != nil {
+		t.Fatalf("ExtractIAMPolicies: %v", err)
+	}
+
+	allPolicies := make(map[string]policy.PolicyDocument)
+	for _, role := range roles {
+		for name, doc := range role.Properties.InlinePolicies {
+			allPolicies[role.LogicalID+"/"+name+" (inline)"] = doc
+		}
+	}
+	for _, pol := range policies {
+		allPolicies[pol.LogicalID] = pol.PolicyDocument
+	}
+
+	var names []string
+	for name := range allPolicies {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	expected := []string{
+		"AppRole/LogAccess (inline)",
+		"AppRole/S3Access (inline)",
+		"SharedPolicy",
+		"WorkerRole/DynamoAccess (inline)",
+	}
+	if len(names) != len(expected) {
+		t.Fatalf("expected %d policy keys, got %d: %v", len(expected), len(names), names)
+	}
+	for i, name := range names {
+		if name != expected[i] {
+			t.Errorf("policy key %d: expected %q, got %q", i, expected[i], name)
+		}
 	}
 }
 
