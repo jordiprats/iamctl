@@ -10,54 +10,40 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newCheckActionCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "pb-check-action <action> [action...]",
-		Aliases: []string{"check-action", "ca"},
-		Short:   "Check whether one or more actions are allowed by a permission boundary",
-		Args:    cobra.MinimumNArgs(1),
-		Example: `  iamctl pb-check-action ec2:RunInstances
-  iamctl pb-check-action s3:PutObject s3:GetObject ec2:DescribeInstances
-  iamctl pb-check-action --pb boundary.json s3:PutObject
-  aws iam get-policy-version ... | iamctl pb-check-action --pb - ec2:RunInstances`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			pbFile, _ := cmd.Flags().GetString("pb")
-
-			pb, err := boundary.LoadFromFile(pbFile)
-			if err != nil {
-				return fmt.Errorf("loading permission boundary: %w", err)
-			}
-
-			fmt.Fprintf(os.Stderr, "Evaluation method: %s\n\n", pb.EvaluationMethod)
-
-			anyDenied := false
-			for _, action := range args {
-				if matcher.IsWildcardAction(action) {
-					fmt.Fprintf(os.Stderr, "🟡  '%s' contains a wildcard — result reflects pattern matching only, not full action enumeration.\n", action)
-				}
-				if boundary.IsActionAllowed(action, pb) {
-					if pb.Policy != nil {
-						fmt.Printf("🟢  %-58s ALLOWED\n", action)
-					} else {
-						_, matchingPatterns := matcher.MatchesAnyPattern(action, pb.Patterns)
-						fmt.Printf("🟢  %-58s matches: %s\n", action, strings.Join(matchingPatterns, ", "))
-					}
-				} else {
-					anyDenied = true
-					fmt.Printf("🔴  %-58s DENIED\n", action)
-				}
-			}
-
-			if anyDenied {
-				os.Exit(1)
-			}
-			return nil
-		},
+// runCheckAction evaluates specific actions against a permission boundary.
+func runCheckAction(cmd *cobra.Command, actions []string) error {
+	pbFile, _ := cmd.Flags().GetString("pb")
+	if pbFile == "" {
+		return fmt.Errorf("--pb is required when checking actions")
 	}
 
-	cmd.Flags().String("pb", "", "Path to the permission boundary file (JSON or text format), or '-' for stdin")
+	pb, err := boundary.LoadFromFile(pbFile)
+	if err != nil {
+		return fmt.Errorf("loading permission boundary: %w", err)
+	}
 
-	_ = cmd.MarkFlagRequired("pb")
+	fmt.Fprintf(os.Stderr, "Evaluation method: %s\n\n", pb.EvaluationMethod)
 
-	return cmd
+	anyDenied := false
+	for _, action := range actions {
+		if matcher.IsWildcardAction(action) {
+			fmt.Fprintf(os.Stderr, "🟡  '%s' contains a wildcard — result reflects pattern matching only, not full action enumeration.\n", action)
+		}
+		if boundary.IsActionAllowed(action, pb) {
+			if pb.Policy != nil {
+				fmt.Printf("🟢  %-58s ALLOWED\n", action)
+			} else {
+				_, matchingPatterns := matcher.MatchesAnyPattern(action, pb.Patterns)
+				fmt.Printf("🟢  %-58s matches: %s\n", action, strings.Join(matchingPatterns, ", "))
+			}
+		} else {
+			anyDenied = true
+			fmt.Printf("🔴  %-58s DENIED\n", action)
+		}
+	}
+
+	if anyDenied {
+		os.Exit(1)
+	}
+	return nil
 }

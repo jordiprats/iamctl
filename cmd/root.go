@@ -13,11 +13,8 @@ func NewRootCmd(version string) *cobra.Command {
 	root.Version = version
 	root.CompletionOptions.DisableDefaultCmd = true
 
-	root.AddCommand(newCheckActionCmd())
-	root.AddCommand(newCheckPolicyCmd())
-	root.AddCommand(newCheckRoleCmd())
+	root.AddCommand(newPbCheckCmd())
 	root.AddCommand(newDescribeRoleCmd())
-	root.AddCommand(newCheckCfCmd())
 	root.AddCommand(newDescribePolicyCmd())
 	root.AddCommand(newDiffCmd())
 	root.AddCommand(newRoleListCmd())

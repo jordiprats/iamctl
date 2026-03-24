@@ -33,149 +33,109 @@ type cfResourceAnalysis struct {
 	extracted            policy.ExtractedActions
 }
 
-func newCheckCfCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "pb-check-cf <template-file>",
-		Aliases: []string{"check-cf", "check-cloudformation", "ccf"},
-		Short:   "Check CloudFormation IAM resources against a permission boundary",
-		Long: `Parse a CloudFormation template, extract IAM roles and standalone IAM policies,
-fetch managed policies from AWS, and evaluate all actions against the permission boundary.
+// runCheckCf checks CloudFormation IAM resources against a permission boundary.
+func runCheckCf(cmd *cobra.Command, templateFile string) error {
+	format, _ := cmd.Flags().GetString("output")
+	profile, _ := cmd.Flags().GetString("profile")
+	resource, _ := cmd.Flags().GetString("resource")
 
-Supported resource types:
-  - AWS::IAM::Role (managed + inline policies)
-  - AWS::IAM::Policy (standalone policy)
-  - AWS::IAM::ManagedPolicy (standalone managed policy)
-
-The permission boundary is resolved in order:
-  1. --pb flag (explicit file)
-  2. PermissionsBoundary property from roles in the template (fetched from AWS by ARN)
-  3. PermissionsBoundary with intrinsic functions (resolved using STS caller identity)
-
-For standalone policies (AWS::IAM::Policy, AWS::IAM::ManagedPolicy), --pb is required.
-
-Managed policy ARNs from ManagedPolicyArns are fetched from AWS.
-Intrinsic functions (Fn::Join, Ref, Fn::Sub) in ARN values are resolved
-automatically using STS GetCallerIdentity for the AWS account ID.
-Inline policies from the Policies property are parsed directly.`,
-		Args: cobra.ExactArgs(1),
-		Example: `  iamctl pb-check-cf template.yaml
-	iamctl pb-check-cf --pb boundary.json template.yaml
-	iamctl pb-check-cf --resource LambdaRole template.yaml
-	iamctl pb-check-cf --profile staging --output json template.yaml
-	iamctl pb-check-cf --pb boundary.json --output sarif template.yaml > results.sarif
-	iamctl pb-check-cf --pb boundary.json --resource MyPolicy template.yaml`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			format, _ := cmd.Flags().GetString("output")
-			profile, _ := cmd.Flags().GetString("profile")
-			resource, _ := cmd.Flags().GetString("resource")
-			templateFile := args[0]
-
-			tmpl, err := cfn.ParseTemplate(templateFile)
-			if err != nil {
-				return err
-			}
-
-			roles, err := cfn.ExtractIAMRoles(tmpl)
-			if err != nil {
-				return err
-			}
-
-			policies, err := cfn.ExtractIAMPolicies(tmpl)
-			if err != nil {
-				return err
-			}
-
-			// Filter to a specific resource if requested
-			if resource != "" {
-				var filteredRoles []cfn.IAMRole
-				for _, r := range roles {
-					if r.LogicalID == resource {
-						filteredRoles = append(filteredRoles, r)
-					}
-				}
-				var filteredPolicies []cfn.IAMPolicyResource
-				for _, p := range policies {
-					if p.LogicalID == resource {
-						filteredPolicies = append(filteredPolicies, p)
-					}
-				}
-				if len(filteredRoles) == 0 && len(filteredPolicies) == 0 {
-					var available []string
-					for _, r := range roles {
-						available = append(available, r.LogicalID)
-					}
-					for _, p := range policies {
-						available = append(available, p.LogicalID)
-					}
-					return fmt.Errorf("resource %q not found; available IAM resources: %s", resource, strings.Join(available, ", "))
-				}
-				roles = filteredRoles
-				policies = filteredPolicies
-			}
-
-			if len(roles) == 0 && len(policies) == 0 {
-				fmt.Println("No IAM role or policy resources found in template")
-				return nil
-			}
-
-			// Collect analyses for all resources
-			var analyses []*cfResourceAnalysis
-
-			for _, role := range roles {
-				a, err := analyzeCfRole(cmd, role, profile)
-				if err != nil {
-					return fmt.Errorf("checking role %q: %w", role.LogicalID, err)
-				}
-				if a != nil {
-					analyses = append(analyses, a)
-				}
-			}
-
-			for _, pol := range policies {
-				a, err := analyzeCfPolicy(cmd, pol)
-				if err != nil {
-					return fmt.Errorf("checking policy %q: %w", pol.LogicalID, err)
-				}
-				if a != nil {
-					analyses = append(analyses, a)
-				}
-			}
-
-			hasBlocked := false
-			for _, a := range analyses {
-				if len(a.BlockedActions) > 0 {
-					hasBlocked = true
-					break
-				}
-			}
-
-			switch format {
-			case "sarif":
-				printCfSARIF(analyses, templateFile, cmd.Root().Version)
-			default:
-				for i, a := range analyses {
-					if i > 0 {
-						fmt.Println()
-						fmt.Println(strings.Repeat("=", 80))
-						fmt.Println()
-					}
-					renderCfAnalysis(cmd, a, format)
-				}
-			}
-
-			if hasBlocked {
-				os.Exit(1)
-			}
-			return nil
-		},
+	tmpl, err := cfn.ParseTemplate(templateFile)
+	if err != nil {
+		return err
 	}
 
-	cmd.Flags().String("pb", "", "Path to the permission boundary file (if omitted, resolves from template)")
-	cmd.Flags().String("output", "list", "Output format: list, json, or sarif")
-	cmd.Flags().String("profile", "", "AWS profile to use")
-	cmd.Flags().String("resource", "", "Logical ID of a specific IAM resource to check (role or policy)")
+	roles, err := cfn.ExtractIAMRoles(tmpl)
+	if err != nil {
+		return err
+	}
 
-	return cmd
+	policies, err := cfn.ExtractIAMPolicies(tmpl)
+	if err != nil {
+		return err
+	}
+
+	// Filter to a specific resource if requested
+	if resource != "" {
+		var filteredRoles []cfn.IAMRole
+		for _, r := range roles {
+			if r.LogicalID == resource {
+				filteredRoles = append(filteredRoles, r)
+			}
+		}
+		var filteredPolicies []cfn.IAMPolicyResource
+		for _, p := range policies {
+			if p.LogicalID == resource {
+				filteredPolicies = append(filteredPolicies, p)
+			}
+		}
+		if len(filteredRoles) == 0 && len(filteredPolicies) == 0 {
+			var available []string
+			for _, r := range roles {
+				available = append(available, r.LogicalID)
+			}
+			for _, p := range policies {
+				available = append(available, p.LogicalID)
+			}
+			return fmt.Errorf("resource %q not found; available IAM resources: %s", resource, strings.Join(available, ", "))
+		}
+		roles = filteredRoles
+		policies = filteredPolicies
+	}
+
+	if len(roles) == 0 && len(policies) == 0 {
+		fmt.Println("No IAM role or policy resources found in template")
+		return nil
+	}
+
+	// Collect analyses for all resources
+	var analyses []*cfResourceAnalysis
+
+	for _, role := range roles {
+		a, err := analyzeCfRole(cmd, role, profile)
+		if err != nil {
+			return fmt.Errorf("checking role %q: %w", role.LogicalID, err)
+		}
+		if a != nil {
+			analyses = append(analyses, a)
+		}
+	}
+
+	for _, pol := range policies {
+		a, err := analyzeCfPolicy(cmd, pol)
+		if err != nil {
+			return fmt.Errorf("checking policy %q: %w", pol.LogicalID, err)
+		}
+		if a != nil {
+			analyses = append(analyses, a)
+		}
+	}
+
+	hasBlocked := false
+	for _, a := range analyses {
+		if len(a.BlockedActions) > 0 {
+			hasBlocked = true
+			break
+		}
+	}
+
+	switch format {
+	case "sarif":
+		printCfSARIF(analyses, templateFile, cmd.Root().Version)
+	default:
+		for i, a := range analyses {
+			if i > 0 {
+				fmt.Println()
+				fmt.Println(strings.Repeat("=", 80))
+				fmt.Println()
+			}
+			renderCfAnalysis(cmd, a, format)
+		}
+	}
+
+	if hasBlocked {
+		os.Exit(1)
+	}
+	return nil
 }
 
 // analyzeCfRole resolves the permission boundary, fetches managed policies, and evaluates
